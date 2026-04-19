@@ -28,6 +28,7 @@ export interface PolicyCall {
   callerDisplayName: string;
   calledAt: string;
   callPriceAda: number | null;
+  callFdvAda: number | null;
   callUnit: string | null;
   callSource: PriceSource;
 }
@@ -77,14 +78,19 @@ export class StorageService {
         caller_display_name TEXT NOT NULL,
         called_at TEXT NOT NULL,
         call_price_ada REAL,
+        call_fdv_ada REAL,
         call_unit TEXT,
         call_source TEXT
       );
     `);
-    // Additive migration for DBs that pre-date call_source.
+    // Additive migrations for DBs that pre-date newer columns.
     const columns = this.db.prepare('PRAGMA table_info(policy_calls)').all() as Array<{ name: string }>;
-    if (!columns.some((c) => c.name === 'call_source')) {
+    const names = new Set(columns.map((c) => c.name));
+    if (!names.has('call_source')) {
       this.db.prepare('ALTER TABLE policy_calls ADD COLUMN call_source TEXT').run();
+    }
+    if (!names.has('call_fdv_ada')) {
+      this.db.prepare('ALTER TABLE policy_calls ADD COLUMN call_fdv_ada REAL').run();
     }
   }
 
@@ -94,8 +100,8 @@ export class StorageService {
     const result = this.db
       .prepare(
         `INSERT OR IGNORE INTO policy_calls
-           (policy_id, guild_id, channel_id, message_id, caller_user_id, caller_display_name, called_at, call_price_ada, call_unit, call_source)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+           (policy_id, guild_id, channel_id, message_id, caller_user_id, caller_display_name, called_at, call_price_ada, call_fdv_ada, call_unit, call_source)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         id,
@@ -106,6 +112,7 @@ export class StorageService {
         call.callerDisplayName,
         call.calledAt,
         call.callPriceAda,
+        call.callFdvAda,
         call.callUnit,
         call.callSource
       );
@@ -130,8 +137,8 @@ export class StorageService {
       .prepare(
         `SELECT policy_id AS policyId, guild_id AS guildId, channel_id AS channelId, message_id AS messageId,
                 caller_user_id AS callerUserId, caller_display_name AS callerDisplayName,
-                called_at AS calledAt, call_price_ada AS callPriceAda, call_unit AS callUnit,
-                call_source AS callSource
+                called_at AS calledAt, call_price_ada AS callPriceAda, call_fdv_ada AS callFdvAda,
+                call_unit AS callUnit, call_source AS callSource
          FROM policy_calls WHERE policy_id = ?`
       )
       .get(id) as PolicyCall | undefined;

@@ -63,7 +63,7 @@ export class AlertService {
       const { firstSeen, record } = this.storage.recordSighting(id);
       const tracked = this.storage.isTracked(id);
 
-      const { price: callPrice, source: callSource, unit: callUnit } = pickCallPrice(
+      const { price: callPrice, fdv: callFdv, source: callSource, unit: callUnit } = pickCallSnapshot(
         dexhunterData,
         snekData,
         assetNameHex
@@ -80,6 +80,7 @@ export class AlertService {
         callerDisplayName,
         calledAt: new Date().toISOString(),
         callPriceAda: callPrice,
+        callFdvAda: callFdv,
         callUnit,
         callSource,
       });
@@ -205,16 +206,18 @@ function extractNameFromUnit(policyId: string, unit: string | null): string | nu
   return normalized.slice(pid.length);
 }
 
-function pickCallPrice(
+function pickCallSnapshot(
   dex: { priceAda: number | null; unit: string | null } | null,
   snek: SnekTokenStats | null,
   assetNameHex: string | null
-): { price: number | null; source: PriceSource; unit: string | null } {
+): { price: number | null; fdv: number | null; source: PriceSource; unit: string | null } {
+  const fdv = snek?.fdvAda ?? null;
   if (dex?.priceAda != null) {
-    return { price: dex.priceAda, source: 'dexhunter', unit: dex.unit ?? null };
+    return { price: dex.priceAda, fdv, source: 'dexhunter', unit: dex.unit ?? null };
   }
   if (snek?.priceAda != null) {
-    return { price: snek.priceAda, source: 'snek', unit: snek.policyId + (assetNameHex ?? '') };
+    return { price: snek.priceAda, fdv, source: 'snek', unit: snek.policyId + (assetNameHex ?? '') };
   }
-  return { price: null, source: null, unit: dex?.unit ?? (assetNameHex ? snek?.policyId + assetNameHex : null) };
+  const fallbackUnit = dex?.unit ?? (snek && assetNameHex ? snek.policyId + assetNameHex : null);
+  return { price: null, fdv, source: null, unit: fallbackUnit };
 }

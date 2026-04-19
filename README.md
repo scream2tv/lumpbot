@@ -191,6 +191,17 @@ WantedBy=multi-user.target
 | `/verify list` | Show all tracked policies |
 | `/lookup target:<policy_id or asset1…>` | Manually generate an embed for a policy or fingerprint |
 
+## FDV and Snek.fun data
+
+The primary market stat in the embed and in the "first caller" footer is **FDV** (fully-diluted value), sourced from Snek.fun's `analytics.snek.fun` API. Specifically:
+
+- **FDV** — `metrics.marketCap` from `GET /v1/pools-feed/initial/state`. Cardano bonding-curve tokens mint their full supply at launch, so market cap and FDV are the same number in practice. Amounts come back in lovelace; Lump Bot divides by 1,000,000 for ADA display.
+- **Bonding-curve %** — `percent` string from `GET /v1/pools-feed/curve/progress`, parsed to a float. Only rendered when present and within `[0, 100]`.
+- **Socials** — `socials.twitter` / `discord` / `telegram` / `website` from `GET /v1/asset-info`. Emitted as links only when the value is already an absolute `https://` URL; raw handles are ignored rather than guessed.
+- **Liquidity / price** — derived from the pool reserves (`pool.y.amount` ADA-side lovelace, `pool.x.amount` token-side smallest-unit). Price is used only as a last-resort multiplier fallback when FDV is missing.
+
+Ratios in the "First @ …" line are computed as `now_fdv / call_fdv` and stored per-call so results are consistent across refreshes. When FDV is unavailable the line falls back to a price-based ratio and labels it `(px)` so it's not mistaken for FDV math.
+
 ## How detection works
 
 1. `messageCreate` receives a message in a monitored (or any) channel.
