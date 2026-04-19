@@ -1,0 +1,40 @@
+{
+  "name": "lump-bot",
+  "version": "1.0.0",
+  "description": "Discord bot for Cardano native asset intelligence, inspired by Rick App.",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
+    "deploy": "ts-node src/deploy-commands.ts",
+    "lint": "tsc --noEmit"
+  },
+  "keywords": [
+    "discord",
+    "cardano",
+    "blockfrost",
+    "dexhunter",
+    "rickbot",
+    "lumpbot"
+  ],
+  "author": "scream2tv",
+  "license": "MIT",
+  "dependencies": {
+    "@blockfrost/blockfrost-js": "^5.7.0",
+    "axios": "^1.7.7",
+    "better-sqlite3": "^11.3.0",
+    "discord.js": "^14.16.3",
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/node": "^22.7.4",
+    "ts-node": "^10.9.2",
+    "ts-node-dev": "^2.0.0",
+    "typescript": "^5.6.2"
+  },
+  "engines": {
+    "node": ">=18.17.0"
+  }
+}
