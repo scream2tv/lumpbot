@@ -39,16 +39,27 @@ async function execute(interaction: ChatInputCommandInteraction, ctx: BotContext
     ctx.dexhunter.getStatsByPolicyId(policyId),
   ]);
 
+  const sampleUnit =
+    dexhunterData?.unit ??
+    blockfrostData?.sampleAssets.find((a) => !/metadata/i.test(a.displayName))?.unit ??
+    blockfrostData?.sampleAssets[0]?.unit ??
+    null;
+  const assetNameHex =
+    sampleUnit && sampleUnit.length > 56 ? sampleUnit.slice(56).toLowerCase() : null;
+  const snekData = assetNameHex ? await ctx.snek.getStats(policyId, assetNameHex) : null;
+
   const { record } = ctx.storage.recordSighting(policyId);
 
   const embed = buildPolicyEmbed({
     policyId,
     blockfrost: blockfrostData,
     dexhunter: dexhunterData,
+    snek: snekData,
     firstSeen: false,
     alertCount: record.alertCount,
     tracked: ctx.storage.isTracked(policyId),
     sourceMessageUrl: null,
+    call: ctx.storage.getCall(policyId),
   });
 
   await interaction.editReply({ embeds: [embed] });

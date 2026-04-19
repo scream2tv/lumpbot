@@ -16,6 +16,16 @@ export function formatAda(value: number | null | undefined, fractionDigits = 2):
   return `${value.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits })} ₳`;
 }
 
+export function formatAdaCompact(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return 'N/A';
+  const abs = Math.abs(value);
+  if (abs >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(2)}B ₳`;
+  if (abs >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M ₳`;
+  if (abs >= 1_000) return `${(value / 1_000).toFixed(1)}K ₳`;
+  if (abs >= 1) return `${value.toFixed(0)} ₳`;
+  return formatAda(value);
+}
+
 export function formatNumber(value: number | null | undefined, fractionDigits = 0): string {
   if (value === null || value === undefined || Number.isNaN(value)) return 'N/A';
   return value.toLocaleString('en-US', { minimumFractionDigits: fractionDigits, maximumFractionDigits: fractionDigits });

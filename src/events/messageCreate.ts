@@ -11,6 +11,7 @@ export function registerMessageCreate(client: Client, ctx: BotContext): void {
 
       const monitored = ctx.config.discord.monitoredChannelIds;
       if (monitored.length > 0 && !monitored.includes(message.channelId)) {
+        logger.debug(`Ignoring message in unmonitored channel ${message.channelId}`);
         return;
       }
 
@@ -18,6 +19,9 @@ export function registerMessageCreate(client: Client, ctx: BotContext): void {
       if (content.length === 0) return;
 
       const policyIds = extractPolicyIds(content);
+      if (policyIds.length > 0) {
+        logger.debug(`Detected ${policyIds.length} policy id(s) in ${message.channelId}`);
+      }
 
       if (policyIds.length === 0) {
         const fingerprints = extractAssetFingerprints(content);

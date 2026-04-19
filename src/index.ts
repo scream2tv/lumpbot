@@ -4,6 +4,7 @@ import { logger, setLogLevel } from './utils/logger';
 import { StorageService } from './services/storage';
 import { BlockfrostService } from './services/blockfrost';
 import { DexHunterService } from './services/dexhunter';
+import { SnekService } from './services/snek';
 import { AlertService } from './services/alertService';
 import { buildCommandCollection } from './commands';
 import { registerEvents } from './events';
@@ -21,6 +22,7 @@ async function main(): Promise<void> {
   const storage = new StorageService(config.storage.databasePath);
   const blockfrost = new BlockfrostService(config);
   const dexhunter = new DexHunterService(config);
+  const snek = new SnekService(config);
 
   const client = new Client({
     intents: [
@@ -31,13 +33,14 @@ async function main(): Promise<void> {
     partials: [Partials.Channel],
   });
 
-  const alerts = new AlertService(client, config, storage, blockfrost, dexhunter);
+  const alerts = new AlertService(client, config, storage, blockfrost, dexhunter, snek);
 
   const ctx: BotContext = {
     config,
     storage,
     blockfrost,
     dexhunter,
+    snek,
     alerts,
     commands: buildCommandCollection(),
   };

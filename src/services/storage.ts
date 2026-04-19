@@ -17,6 +17,21 @@ export interface TrackedPolicy {
   addedAt: string;
 }
 
+export type PriceSource = 'dexhunter' | 'snek' | null;
+
+export interface PolicyCall {
+  policyId: string;
+  guildId: string;
+  channelId: string;
+  messageId: string;
+  callerUserId: string;
+  callerDisplayName: string;
+  calledAt: string;
+  callPriceAda: number | null;
+  callUnit: string | null;
+  callSource: PriceSource;
+}
+
 export class StorageService {
   private readonly db: Database.Database;
 
@@ -52,7 +67,75 @@ export class StorageService {
         alerted_at INTEGER NOT NULL,
         PRIMARY KEY (policy_id, channel_id)
       );
+
+      CREATE TABLE IF NOT EXISTS policy_calls (
+        policy_id TEXT PRIMARY KEY,
+        guild_id TEXT NOT NULL,
+        channel_id TEXT NOT NULL,
+        message_id TEXT NOT NULL,
+        caller_user_id TEXT NOT NULL,
+        caller_display_name TEXT NOT NULL,
+        called_at TEXT NOT NULL,
+        call_price_ada REAL,
+        call_unit TEXT,
+        call_source TEXT
+      );
     `);
+    // Additive migration for DBs that pre-date call_source.
+    const columns = this.db.prepare('PRAGMA table_info(policy_calls)').all() as Array<{ name: string }>;
+    if (!columns.some((c) => c.name === 'call_source')) {
+      this.db.prepare('ALTER TABLE policy_calls ADD COLUMN call_source TEXT').run();
+    }
+  }
+
+  /** Records a first-ever call for a policy. INSERT OR IGNORE — only the first caller wins. */
+  recordCall(call: PolicyCall): { firstCaller: boolean; record: PolicyCall } {
+    const id = call.policyId.toLowerCase();
+    const result = this.db
+      .prepare(
+        `INSERT OR IGNORE INTO policy_calls
+           (policy_id, guild_id, channel_id, message_id, caller_user_id, caller_display_name, called_at, call_price_ada, call_unit, call_source)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        id,
+        call.guildId,
+        call.channelId,
+        call.messageId,
+        call.callerUserId,
+        call.callerDisplayName,
+        call.calledAt,
+        call.callPriceAda,
+        call.callUnit,
+        call.callSource
+      );
+    if (result.changes > 0) return { firstCaller: true, record: { ...call, policyId: id } };
+    const existing = this.getCall(id);
+    return { firstCaller: false, record: existing! };
+  }
+
+  getSighting(policyId: string): SeenPolicy | null {
+    const id = policyId.toLowerCase();
+    const row = this.db
+      .prepare(
+        'SELECT policy_id AS policyId, first_seen_at AS firstSeenAt, last_seen_at AS lastSeenAt, alert_count AS alertCount FROM seen_policies WHERE policy_id = ?'
+      )
+      .get(id) as SeenPolicy | undefined;
+    return row ?? null;
+  }
+
+  getCall(policyId: string): PolicyCall | null {
+    const id = policyId.toLowerCase();
+    const row = this.db
+      .prepare(
+        `SELECT policy_id AS policyId, guild_id AS guildId, channel_id AS channelId, message_id AS messageId,
+                caller_user_id AS callerUserId, caller_display_name AS callerDisplayName,
+                called_at AS calledAt, call_price_ada AS callPriceAda, call_unit AS callUnit,
+                call_source AS callSource
+         FROM policy_calls WHERE policy_id = ?`
+      )
+      .get(id) as PolicyCall | undefined;
+    return row ?? null;
   }
 
   close(): void {

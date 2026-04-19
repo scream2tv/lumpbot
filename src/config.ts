@@ -46,6 +46,9 @@ export interface LumpBotConfig {
     baseUrl: string;
     apiKey: string;
   };
+  snek: {
+    baseUrl: string;
+  };
   storage: {
     databasePath: string;
   };
@@ -83,6 +86,9 @@ export function loadConfig(): LumpBotConfig {
     koios: {
       baseUrl: optional('KOIOS_BASE_URL', 'https://api.koios.rest/api/v1'),
       apiKey: optional('KOIOS_API_KEY'),
+    },
+    snek: {
+      baseUrl: optional('SNEK_BASE_URL', 'https://analytics.snek.fun'),
     },
     storage: {
       databasePath,

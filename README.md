@@ -62,7 +62,8 @@ Invite the bot to your guild with permissions `Send Messages`, `Embed Links`, `R
 | `DEXHUNTER_PARTNER_ID` | no | DexHunter partner ID (optional) |
 | `KOIOS_BASE_URL` | no | Koios fallback base URL |
 | `KOIOS_API_KEY` | no | Koios bearer token (optional) |
-| `DATABASE_PATH` | no | SQLite path, default `./data/lumpbot.sqlite` |
+| `SNEK_BASE_URL` | no | Snek.fun analytics base URL, default `https://analytics.snek.fun` |
+| `DATABASE_PATH` | no | SQLite path, default `./data/lumpbot.sqlite`. On Railway set to `/data/lumpbot.sqlite` |
 | `EXTERNAL_WEBHOOK_URL` | no | POST each alert payload to this URL |
 | `LOG_LEVEL` | no | `debug` / `info` / `warn` / `error` |
 
@@ -91,59 +92,76 @@ npm run build && npm start
 
 Post a message containing a 56-char hex Policy ID in a monitored channel; the embed should land in `ALERT_CHANNEL_ID`.
 
-## VPS deployment
+## Deploying to Railway
 
-The bot is a single long-running Node process that needs outbound HTTPS and a writable data directory. Any VPS (Hetzner, Fly.io, Railway, Render, DigitalOcean) will do.
+Railway is the fastest managed path: connect the repo, set env vars, attach a volume for the SQLite file. A `railway.json` in the repo pins the builder and restart policy.
 
-### 1. Provision
+### 1. Create the project
 
-Pick a small Ubuntu 22.04/24.04 LTS instance (512 MB RAM is enough). SSH in:
+- Sign in at https://railway.com and create a new project.
+- Choose **Deploy from GitHub repo** and pick your fork of `lumpbot`.
+- Railway will auto-detect Node via Nixpacks, run `npm install && npm run build`, and start with `npm start`.
 
-```bash
-sudo apt update && sudo apt install -y build-essential git curl
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-sudo apt install -y nodejs
-sudo npm install -g pm2
+### 2. Attach a persistent volume
+
+The SQLite database (sightings, tracked policies, call records) must survive restarts/redeploys.
+
+- In the service's **Settings → Volumes**, add a new volume.
+- Mount path: `/data`
+- Size: 1 GB is plenty.
+
+### 3. Set environment variables
+
+In the service's **Variables** tab, paste the contents of your filled-in `.env` (omit comments). Add one extra var so SQLite writes to the mounted volume:
+
+```
+DATABASE_PATH=/data/lumpbot.sqlite
 ```
 
-### 2. Deploy
+See [Environment variables](#environment-variables) for the full list.
+
+### 4. Register slash commands (one-off)
+
+Slash commands have to be registered once per guild. Easiest way: run the deploy script from your laptop against the same secrets:
 
 ```bash
-git clone https://github.com/scream2tv/lumpbot.git /opt/lumpbot
-cd /opt/lumpbot
+npm run deploy
+```
+
+That calls the Discord REST API directly; it doesn't need the bot to be running on Railway. Re-run only when you add or rename commands.
+
+### 5. Verify & tail logs
+
+- Railway's **Deployments → Logs** should show `Lump Bot is online as ...` within a few seconds.
+- Post a 56-char policy ID (or a full asset id) in a monitored channel — the embed should land in `ALERT_CHANNEL_ID`.
+
+### Backups
+
+Railway volumes are replicated but not versioned. For off-box backups, add a lightweight cron (e.g. a second Railway service, GitHub Actions, or a local script) that runs:
+
+```bash
+sqlite3 /data/lumpbot.sqlite ".backup '/data/lumpbot-$(date -u +%F).sqlite'"
+```
+
+and rotates old copies.
+
+### Postgres (optional, not required)
+
+The bot runs on SQLite by default because a single Discord bot instance gets no benefit from a shared database. If you later want managed backups or plan to run multiple instances, the storage layer can be swapped to Railway's managed Postgres plugin without changing anything else in the app — the public `StorageService` API is already abstracted from its SQL dialect. Not implemented yet; open an issue if you want this.
+
+## VPS deployment (alternative)
+
+Any small Ubuntu box works if you'd rather self-host than use Railway. Install Node 20 and pm2, clone the repo, populate `.env`, then:
+
+```bash
 npm ci
-cp .env.example .env
-nano .env   # populate secrets
 npm run build
-npm run deploy   # register slash commands in your guild
-```
-
-### 3. Run under pm2
-
-```bash
+npm run deploy
 pm2 start dist/index.js --name lumpbot --time
-pm2 save
-pm2 startup systemd -u $USER --hp $HOME
-# run the command pm2 prints
+pm2 save && pm2 startup
 ```
 
-Useful commands:
-
-```bash
-pm2 logs lumpbot
-pm2 restart lumpbot
-pm2 stop lumpbot
-```
-
-### 4. Keep it healthy
-
-- Rotate logs: `pm2 install pm2-logrotate`
-- Back up `./data/lumpbot.sqlite` daily (cron + `sqlite3 .backup`).
-- Set firewall rules to deny all inbound except SSH.
-
-### systemd alternative
-
-If you prefer systemd over pm2:
+Back up `./data/lumpbot.sqlite` on a cron. If you prefer systemd, a minimal unit file:
 
 ```ini
 # /etc/systemd/system/lumpbot.service
@@ -162,12 +180,6 @@ RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
-```
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now lumpbot
-sudo journalctl -u lumpbot -f
 ```
 
 ## Commands
