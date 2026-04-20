@@ -33,6 +33,21 @@ export interface PolicyCall {
   callSource: PriceSource;
 }
 
+export interface WalletWatch {
+  id: number;
+  discordUserId: string;
+  stakeKey: string;
+  displayAddress: string;
+  isEnterprise: boolean;
+  label: string | null;
+  createdAt: number;
+  lastNotifiedTxHash: string | null;
+  lastNotifiedAt: number | null;
+  dmDisabledUntil: number | null;
+}
+
+export type WalletWatchAction = 'add' | 'remove';
+
 export class StorageService {
   private readonly db: Database.Database;
 
@@ -82,6 +97,30 @@ export class StorageService {
         call_unit TEXT,
         call_source TEXT
       );
+    `);
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS wallet_watches (
+        id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+        discord_user_id        TEXT NOT NULL,
+        stake_key              TEXT NOT NULL,
+        display_address        TEXT NOT NULL,
+        is_enterprise          INTEGER NOT NULL DEFAULT 0,
+        label                  TEXT,
+        created_at             INTEGER NOT NULL,
+        last_notified_tx_hash  TEXT,
+        last_notified_at       INTEGER,
+        dm_disabled_until      INTEGER,
+        UNIQUE(discord_user_id, stake_key)
+      );
+      CREATE INDEX IF NOT EXISTS idx_wallet_watches_stake ON wallet_watches(stake_key);
+      CREATE INDEX IF NOT EXISTS idx_wallet_watches_user  ON wallet_watches(discord_user_id);
+
+      CREATE TABLE IF NOT EXISTS wallet_rate_limit (
+        discord_user_id  TEXT NOT NULL,
+        action           TEXT NOT NULL,
+        ts               INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_wallet_rate_limit_user_ts ON wallet_rate_limit(discord_user_id, ts);
     `);
     // Additive migrations for DBs that pre-date newer columns.
     const columns = this.db.prepare('PRAGMA table_info(policy_calls)').all() as Array<{ name: string }>;
