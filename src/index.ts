@@ -46,7 +46,6 @@ async function main(): Promise<void> {
   const walletWatchService = new WalletWatchService(
     storage,
     blockfrost,
-    dexhunter,
     client,
     cardanoscanBase,
   );
@@ -69,8 +68,6 @@ async function main(): Promise<void> {
   };
 
   registerEvents(client, ctx);
-
-  walletWatcher.start();
 
   const cleanupInterval = setInterval(
     () => {

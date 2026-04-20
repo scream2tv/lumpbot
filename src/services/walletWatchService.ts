@@ -1,7 +1,6 @@
 import { Client, DiscordAPIError } from 'discord.js';
 import { StorageService, WalletWatch } from './storage';
 import { BlockfrostService, TxUtxos } from './blockfrost';
-import { DexHunterService } from './dexhunter';
 import { logger } from '../utils/logger';
 import {
   buildWalletMoveEmbed,
@@ -74,7 +73,6 @@ export class WalletWatchService {
   constructor(
     private readonly storage: StorageService,
     private readonly blockfrost: BlockfrostService,
-    private readonly dexhunter: DexHunterService,
     private readonly client: Client,
     private readonly cardanoscanBase: string,
   ) {}

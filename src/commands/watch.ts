@@ -112,7 +112,8 @@ async function handleAdd(
     try {
       baselineTxHash = await ctx.walletWatchService.baselineTxHashFor(stakeKey);
     } catch (err: any) {
-      if (err?.status_code === 404) {
+      const status = err?.response?.status ?? err?.status_code;
+      if (status === 404) {
         neverActive = true;
       } else {
         throw err;
@@ -165,6 +166,8 @@ async function handleRemove(
   }
   ctx.storage.recordWatchAction(userId, 'remove');
 
+  await interaction.deferReply({ ephemeral: true });
+
   const raw = interaction.options.getString('address', true).trim().toLowerCase();
   let removed = ctx.storage.removeWalletWatch(userId, raw);
   if (!removed) {
@@ -179,10 +182,7 @@ async function handleRemove(
     }
   }
 
-  await interaction.reply({
-    content: removed ? '🗑️ Removed.' : "You weren't watching that wallet.",
-    ephemeral: true,
-  });
+  await interaction.editReply(removed ? '🗑️ Removed.' : "You weren't watching that wallet.");
 }
 
 async function handleList(

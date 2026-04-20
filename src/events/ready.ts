@@ -1,12 +1,14 @@
 import { Client, Events } from 'discord.js';
+import { BotContext } from '../botContext';
 import { logger } from '../utils/logger';
 
-export function registerReady(client: Client): void {
+export function registerReady(client: Client, ctx: BotContext): void {
   client.once(Events.ClientReady, (readyClient) => {
     logger.info(`Lump Bot is online as ${readyClient.user.tag}`);
     readyClient.user.setPresence({
       status: 'online',
       activities: [{ name: 'Cardano Policy IDs', type: 3 }],
     });
+    ctx.walletWatcher.start();
   });
 }
