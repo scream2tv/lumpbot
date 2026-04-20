@@ -44,6 +44,7 @@ async function run(): Promise<void> {
     assert.equal(result.ticker, 'LUMP');
     assert.equal(result.logoCid, 'bafkLUMP');
     assert.equal(result.dhUnit, null);
+    assert.ok(result.snekUnit !== null, 'snekUnit should be non-null on Snek hit');
   }
 
   // Case 2: Snek miss + DH hit with matching unit → use DH ticker, no logo.
@@ -60,6 +61,7 @@ async function run(): Promise<void> {
     assert.equal(result.ticker, 'MOO');
     assert.equal(result.logoCid, null);
     assert.equal(result.dhUnit, 'abc123deadbeef');
+    assert.equal(result.snekUnit, null, 'snekUnit should be null on Snek miss');
   }
 
   // Case 3: Snek miss + DH hit with NON-matching unit → fall through to hex decode.
@@ -105,6 +107,7 @@ async function run(): Promise<void> {
     );
     const result = await (svc2 as any).resolveTicker(UNIT);
     assert.equal(result.ticker, 'MOO', 'should hex-decode when DH unit mismatches');
+    assert.equal(result.snekUnit, null, 'snekUnit should be null on Snek miss');
   }
 
   // Case 4: Everything misses → NFT fallback.
@@ -123,6 +126,7 @@ async function run(): Promise<void> {
     );
     const result = await (svc as any).resolveTicker(UNIT);
     assert.ok(result.ticker.startsWith('NFT '), `expected NFT fallback, got ${result.ticker}`);
+    assert.equal(result.snekUnit, null, 'snekUnit should be null on Snek miss');
   }
 
   // Case 5: Snek throws → treated as miss; DH hit used.
@@ -140,6 +144,7 @@ async function run(): Promise<void> {
     );
     const result = await (svc as any).resolveTicker('abc123deadbeef');
     assert.equal(result.ticker, 'MOO');
+    assert.equal(result.snekUnit, null, 'snekUnit should be null when Snek throws');
   }
 
   // Case 6: Cache hit → second call with same unit doesn't re-invoke snek/dh.

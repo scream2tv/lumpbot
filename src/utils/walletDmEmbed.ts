@@ -24,13 +24,13 @@ export interface GroupedMoveEvent {
   label: string | null;
   direction: 'IN' | 'OUT' | 'SELF';
   lovelaceDelta: bigint;
-  feeLovelace: bigint;          // NEW
-  assetDeltas: Array<{ unit: string; quantity: bigint; ticker: string; logoCid: string | null; dhUnit: string | null }>;
+  feeLovelace: bigint;
+  assetDeltas: Array<{ unit: string; quantity: bigint; ticker: string; logoCid: string | null; dhUnit: string | null; snekUnit: string | null }>;
   primaryTxHash: string;
   otherTxHashes: string[];     // excludes primary
   blockTime: number;
   cardanoscanBase: string;
-  hasScriptOutput: boolean;    // NEW
+  hasScriptOutput: boolean;
 }
 
 const DIRECTION_LABEL = {
@@ -150,10 +150,6 @@ export function buildGroupedMoveEmbed(evt: GroupedMoveEvent): EmbedBuilder {
   return buildTransferEmbed(evt);
 }
 
-function spoilerHashes(hashes: string[]): string {
-  return `||${hashes.map((h) => truncateMiddle(h, 8, 6)).join(', ')}||`;
-}
-
 function formatSignedAdaLine(lovelace: bigint): string {
   const negative = lovelace < 0n;
   const abs = negative ? -lovelace : lovelace;
@@ -175,7 +171,6 @@ function buildSwapEmbed(evt: GroupedMoveEvent, kind: 'BUY' | 'SELL'): EmbedBuild
   const kindLabel = kind === 'BUY' ? 'Buy' : 'Sell';
   const title = `${emoji} ${kindLabel} — ${labelOrShort(evt.label, evt.displayAddress)}`;
 
-  // Signed asset lines (top 3 by |quantity|)
   const sortedAssets = [...evt.assetDeltas].sort((a, b) => {
     const aa = a.quantity < 0n ? -a.quantity : a.quantity;
     const bb = b.quantity < 0n ? -b.quantity : b.quantity;
@@ -191,26 +186,55 @@ function buildSwapEmbed(evt: GroupedMoveEvent, kind: 'BUY' | 'SELL'): EmbedBuild
   });
   if (more > 0) assetLines.push(`(+${more} more)`);
 
-  const descLines = [...assetLines, formatSignedAdaLineWithFee(evt.lovelaceDelta, evt.feeLovelace)];
+  // Approximate swap ADA.
+  const absLovelace = evt.lovelaceDelta < 0n ? -evt.lovelaceDelta : evt.lovelaceDelta;
+  let adaLine: string;
+  if (kind === 'BUY') {
+    const approx = absLovelace - evt.feeLovelace;
+    adaLine = approx > 0n
+      ? `Spent ≈ ${formatAda(Number(approx) / 1_000_000, 2)} ADA`
+      : formatSignedAdaLineWithFee(evt.lovelaceDelta, evt.feeLovelace);
+  } else {
+    const approx = evt.lovelaceDelta + evt.feeLovelace;
+    adaLine = approx > 0n
+      ? `Received ≈ ${formatAda(Number(approx) / 1_000_000, 2)} ADA`
+      : formatSignedAdaLineWithFee(evt.lovelaceDelta, evt.feeLovelace);
+  }
 
   const embed = new EmbedBuilder()
     .setColor(color)
     .setTitle(title)
-    .setDescription(descLines.join('\n'));
+    .setDescription([...assetLines, adaLine].join('\n'));
 
   const firstLogo = shownAssets.find((d) => d.logoCid)?.logoCid;
   if (firstLogo) embed.setThumbnail(`https://ipfs.io/ipfs/${firstLogo}`);
 
+  // Tx links row.
   const txLinks = [`[Cardanoscan](${evt.cardanoscanBase}/transaction/${evt.primaryTxHash})`];
   const firstDhUnit = shownAssets.find((d) => d.dhUnit)?.dhUnit;
   if (firstDhUnit) {
     const cleanUnit = firstDhUnit.replace('.', '');
     txLinks.push(`[DexHunter](https://app.dexhunter.io/trade/${cleanUnit})`);
   }
+  const firstSnekUnit = shownAssets.find((d) => d.snekUnit)?.snekUnit;
+  if (firstSnekUnit) {
+    txLinks.push(`[Snek](https://snek.fun/launch/${firstSnekUnit})`);
+  }
   embed.addFields({ name: 'Tx', value: txLinks.join(' · ') });
 
-  if (evt.otherTxHashes.length > 0) {
-    embed.addFields({ name: 'Also', value: spoilerHashes(evt.otherTxHashes) });
+  // Fee field, when present.
+  if (evt.feeLovelace > 0n) {
+    const fee = Number(evt.feeLovelace) / 1_000_000;
+    embed.addFields({ name: 'Fee', value: `${formatAda(fee, 2)} ADA`, inline: true });
+  }
+
+  // Policy ID of the primary (largest |quantity|) asset.
+  const primary = shownAssets[0];
+  if (primary) {
+    const { policyId } = splitCardanoUnit(primary.unit);
+    if (policyId) {
+      embed.addFields({ name: 'Policy ID', value: `\`${policyId}\``, inline: true });
+    }
   }
 
   if (evt.blockTime > 0) embed.setTimestamp(new Date(evt.blockTime * 1000));
@@ -242,6 +266,12 @@ function buildTransferEmbed(evt: GroupedMoveEvent): EmbedBuilder {
     });
     if (more > 0) lines.push(`(+${more} more)`);
     embed.addFields({ name: 'Assets', value: lines.join('\n') });
+
+    const primary = sorted[0];
+    const { policyId } = splitCardanoUnit(primary.unit);
+    if (policyId) {
+      embed.addFields({ name: 'Policy ID', value: `\`${policyId}\``, inline: true });
+    }
   }
 
   if (evt.hasScriptOutput) {
@@ -255,9 +285,6 @@ function buildTransferEmbed(evt: GroupedMoveEvent): EmbedBuilder {
     name: 'Tx',
     value: `[Cardanoscan](${evt.cardanoscanBase}/transaction/${evt.primaryTxHash})`,
   });
-  if (evt.otherTxHashes.length > 0) {
-    embed.addFields({ name: 'Also', value: spoilerHashes(evt.otherTxHashes) });
-  }
   if (evt.blockTime > 0) embed.setTimestamp(new Date(evt.blockTime * 1000));
   return embed;
 }

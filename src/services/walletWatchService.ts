@@ -164,7 +164,7 @@ export function groupMoves(classified: ClassifiedMove[]): WalletMoveGroup[] {
 }
 
 interface CacheEntry { addrs: Set<string>; at: number }
-interface TickerCacheEntry { ticker: string; logoCid: string | null; dhUnit: string | null; at: number }
+interface TickerCacheEntry { ticker: string; logoCid: string | null; dhUnit: string | null; snekUnit: string | null; at: number }
 
 export class WalletWatchService {
   private addressCache = new Map<string, CacheEntry>();
@@ -205,15 +205,16 @@ export class WalletWatchService {
     return false;
   }
 
-  private async resolveTicker(unit: string): Promise<{ ticker: string; logoCid: string | null; dhUnit: string | null }> {
+  private async resolveTicker(unit: string): Promise<{ ticker: string; logoCid: string | null; dhUnit: string | null; snekUnit: string | null }> {
     const cached = this.tickerCache.get(unit);
     if (cached && Date.now() - cached.at < this.TICKER_TTL_MS) {
-      return { ticker: cached.ticker, logoCid: cached.logoCid, dhUnit: cached.dhUnit };
+      return { ticker: cached.ticker, logoCid: cached.logoCid, dhUnit: cached.dhUnit, snekUnit: cached.snekUnit };
     }
     const { policyId, assetNameHex } = splitCardanoUnit(unit);
     let ticker: string | null = null;
     let logoCid: string | null = null;
     let dhUnit: string | null = null;
+    let snekUnit: string | null = null;
 
     // 1. Snek (authoritative for snek.fun; gives logo)
     try {
@@ -221,6 +222,7 @@ export class WalletWatchService {
       if (meta) {
         ticker = meta.ticker;
         logoCid = meta.logoCid;
+        snekUnit = `${policyId}${assetNameHex}`;
       }
     } catch (err) {
       logger.warn('snek getAssetMeta failed', { unit, err });
@@ -254,7 +256,7 @@ export class WalletWatchService {
     // 4. Final NFT fallback
     if (!ticker) ticker = `NFT ${truncateMiddle(policyId, 6, 4)}`;
 
-    const result = { ticker, logoCid, dhUnit };
+    const result = { ticker, logoCid, dhUnit, snekUnit };
     this.tickerCache.set(unit, { ...result, at: Date.now() });
     return result;
   }
@@ -337,6 +339,7 @@ export class WalletWatchService {
           ticker: meta.ticker,
           logoCid: meta.logoCid,
           dhUnit: meta.dhUnit,
+          snekUnit: meta.snekUnit,   // NEW
         };
       }),
     );
