@@ -13,6 +13,10 @@ const tp = parseCardanoAddress('addr_test1qp0acdefghjklmnpqrstuvwxyz023456');
 assert.equal(tp?.kind, 'payment');
 assert.equal(tp?.network, 'testnet');
 
+const ts = parseCardanoAddress('stake_test1u9acdefghjklmnpqrstuvwxyz023456789acdefghjklmnpqrs');
+assert.equal(ts?.kind, 'stake');
+assert.equal(ts?.network, 'testnet');
+
 assert.equal(parseCardanoAddress('xyz1abc'), null);
 assert.equal(parseCardanoAddress('noseparator'), null);
 assert.equal(parseCardanoAddress('addr1Babc'), null);
