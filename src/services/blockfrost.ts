@@ -55,7 +55,6 @@ export class BlockfrostService {
   private readonly limiter: RateLimiter;
   private readonly koios: AxiosInstance;
   private readonly koiosBaseUrl: string;
-  private readonly blockfrostBase: string;
 
   constructor(private readonly config: LumpBotConfig) {
     this.api = new BlockFrostAPI({
@@ -71,12 +70,6 @@ export class BlockfrostService {
         ? { Authorization: `Bearer ${config.koios.apiKey}` }
         : {},
     });
-    const networkMap: Record<string, string> = {
-      mainnet: 'https://cardano-mainnet.blockfrost.io/api/v0',
-      preprod: 'https://cardano-preprod.blockfrost.io/api/v0',
-      preview: 'https://cardano-preview.blockfrost.io/api/v0',
-    };
-    this.blockfrostBase = networkMap[config.blockfrost.network] ?? networkMap['mainnet'];
   }
 
   async getPolicySummary(policyId: string): Promise<PolicyAssetSummary | null> {
@@ -251,30 +244,43 @@ export class BlockfrostService {
    * Latest transactions for a stake account, newest first.
    * count caps at 100 per Blockfrost; we typically pass 10.
    *
-   * NOTE: We bypass the SDK here because @blockfrost/blockfrost-js v5.7 does
-   * not wrap the /accounts/{stake_address}/addresses/transactions REST endpoint.
-   * Calling the SDK's addressesTransactions() with a stake key returns HTTP 400
-   * at runtime because that method expects a payment address. We call the REST
-   * API directly via axios instead.
+   * Blockfrost has no /accounts/{stake}/addresses/transactions endpoint.
+   * We fan out: list all payment addresses under the stake key, fetch
+   * transactions per address, dedupe by tx_hash, sort descending, return top N.
    */
   async getAccountTransactions(
     stakeAddress: string,
     opts: { count?: number } = {},
   ): Promise<AccountTransaction[]> {
     const count = Math.min(Math.max(opts.count ?? 10, 1), 100);
-    const url = `${this.blockfrostBase}/accounts/${stakeAddress}/addresses/transactions`;
-    const response = await this.limiter.schedule(() =>
-      axios.get<Array<{ tx_hash: string; block_height: number; block_time: number; tx_index?: number; epoch_no?: number }>>(url, {
-        params: { count, order: 'desc' },
-        headers: { project_id: this.config.blockfrost.apiKey },
-        timeout: 15_000,
-      }),
+
+    const addresses = await this.getAccountAddresses(stakeAddress);
+    if (addresses.length === 0) return [];
+
+    const perAddressResults = await Promise.all(
+      addresses.map((addr) =>
+        this.limiter.schedule(() =>
+          this.api.addressesTransactions(addr, { count, order: 'desc' }),
+        ),
+      ),
     );
-    return response.data.map((r) => ({
-      txHash: r.tx_hash,
-      blockHeight: r.block_height,
-      blockTime: r.block_time,
-    }));
+
+    const seen = new Map<string, AccountTransaction>();
+    for (const rows of perAddressResults) {
+      for (const r of rows) {
+        if (!seen.has(r.tx_hash)) {
+          seen.set(r.tx_hash, {
+            txHash: r.tx_hash,
+            blockHeight: r.block_height,
+            blockTime: r.block_time,
+          });
+        }
+      }
+    }
+
+    return Array.from(seen.values())
+      .sort((a, b) => b.blockTime - a.blockTime)
+      .slice(0, count);
   }
 
   /**
