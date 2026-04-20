@@ -114,7 +114,7 @@ All replies are ephemeral. Every invocation first checks `interaction.channelId 
 ### `/watch add <address>`
 
 1. Channel gate.
-2. Per-user rate gate: `countRecentWatchActions(user, 'add', 60_000) >= 10` → reply `Slow down — try again in a minute.` Otherwise `recordWatchAction(...)`.
+2. Per-user rate gate (`action='add'`): `countRecentWatchActions(user, 'add', 60_000) >= 10` → reply `Slow down — try again in a minute.` Otherwise `recordWatchAction(user, 'add')`.
 3. Validate via `cardanoAddress.ts` (bech32 + network match). Invalid → `That doesn't look like a valid Cardano address.`
 4. Normalize to stake key (see above).
 5. Enforce cap: `limit = member.roles.cache.has(verifiedWalletRoleId) ? 20 : 6`. At limit → reply with the count and limit.
@@ -127,7 +127,7 @@ All replies are ephemeral. Every invocation first checks `interaction.channelId 
 
 ### `/watch remove <address>`
 
-1. Channel gate + rate gate.
+1. Channel gate + rate gate (`action='remove'`).
 2. `removeWalletWatch(user, address)` tries both as-stake-key and re-normalized.
 3. Reply `🗑️ Removed.` or `You weren't watching that wallet.` (Never leaks whether anyone else is watching.)
 
@@ -147,12 +147,18 @@ All replies are ephemeral. Every invocation first checks `interaction.channelId 
 every WALLET_POLL_INTERVAL_MS:
   if isTicking: return   // skip if previous tick still running
   isTicking = true
-  stakeKeys = storage.distinctWatchedStakeKeys()
-  for each stakeKey (via existing RateLimiter):
-    try { await walletWatchService.checkWallet(stakeKey) }
-    catch err { logger.warn({ stakeKey, err }, 'wallet poll failed, continuing') }
-  isTicking = false
+  try {
+    stakeKeys = storage.distinctWatchedStakeKeys()
+    for each stakeKey:
+      await blockfrostRateLimiter.acquire()   // existing RateLimiter (token bucket)
+      try { await walletWatchService.checkWallet(stakeKey) }
+      catch err { logger.warn({ stakeKey, err }, 'wallet poll failed, continuing') }
+  } finally {
+    isTicking = false
+  }
 ```
+
+The rate limiter is the existing `src/utils/rateLimiter.ts` used by other Blockfrost-facing services; the watcher shares the same bucket so combined traffic stays under the account quota.
 
 ### `walletWatchService.checkWallet(stakeKey)`
 
@@ -163,7 +169,19 @@ every WALLET_POLL_INTERVAL_MS:
    - Skip if `now < sub.last_notified_at + 30_000`.
    - Skip if `now < sub.dm_disabled_until`.
    - If new-tx count > 3, send one summary DM; else one DM per tx.
-   - For each individual DM: fetch `/txs/{hash}/utxos`, classify `direction` by summing outputs-to-this-stake minus inputs-from-this-stake, compute ADA delta + top-3 native-asset deltas, build embed, DM it.
+   - For each individual DM: fetch `/txs/{hash}/utxos`, classify direction and deltas (see below), build embed, DM it.
+
+**Direction classification:** Blockfrost UTxO addresses are full bech32 strings that include the stake component, but parsing them without a heavy library is brittle. Instead, on the first DM for a stake key (or after a 1h TTL), cache its payment-address set via `GET /accounts/{stake}/addresses` and store in memory on the service. For each tx:
+
+- `mine = Set` of the cached payment addresses (or `{displayAddress}` for enterprise).
+- `inputsMine = any(input.address ∈ mine)`, `outputsMine = any(output.address ∈ mine)`.
+- If `inputsMine && outputsMine` → `SELF` (change output still lands in `mine`).
+- If `inputsMine && !outputsMine` → `OUT`.
+- If `!inputsMine && outputsMine` → `IN`.
+
+**ADA delta:** `sum(output.amount.lovelace for output.address ∈ mine) − sum(input.amount.lovelace for input.address ∈ mine)`.
+
+**Native-asset deltas:** same sum by `unit` (policyId+assetName hex), sorted by `|abs|` descending, top 3 kept. Tickers resolved via DexHunter if available; otherwise hex asset name decoded via existing `hexToUtf8Safe`; NFTs (quantity=1 and large token) display as `NFT <shortPolicy>`.
 4. On successful send: `updateWatchAfterNotify(sub.id, newestHashInBatch, now)`.
 5. On DM failure (Discord error, e.g. 50007): log once at info, `setWatchDmCooldown(sub.id, now + 24*3600*1000)`, do NOT advance the cursor. When DMs come back, the user naturally receives the backlog (bounded by the 10-tx fetch window — larger gaps collapse to a summary).
 
@@ -183,7 +201,8 @@ On embed-send failure (very rare) retry once as plain text: `💸 Wallet <short 
 ## Rate & resource budget
 
 At an expected ceiling of ~200 distinct watched stake keys:
-- Main poll: 200 calls/minute = ~3.3 req/s (well under Blockfrost free-tier 10 req/s).
+- Main poll: 1 `/accounts/{stake}/addresses/transactions` per wallet per tick = ~3.3 req/s at 60s interval (well under Blockfrost free-tier 10 req/s).
+- `/accounts/{stake}/addresses` fetched once per watcher per 1h TTL (~200 calls/hour on a full refresh cycle).
 - Each new tx adds one `/txs/{hash}/utxos` call. Normal activity keeps us under daily caps.
 
 ## Error handling summary
@@ -203,7 +222,7 @@ At an expected ceiling of ~200 distinct watched stake keys:
 
 ## Abuse resistance
 
-- Per-user `add`/`remove` rate limit: 10 per 60s, persisted in `wallet_rate_limit`.
+- Per-user rate limit: 10 `add` per 60s and 10 `remove` per 60s (separate buckets by `action` column), persisted in `wallet_rate_limit`. `list` is not rate-limited since it's a DB-only read.
 - Cap enforcement (6 / 20 by role) in `addWalletWatch`.
 - Channel gate: commands elsewhere are ephemerally rejected, don't count against rate limit.
 - `/watch list` only ever reads the invoker's own rows; no `user` arg; no admin variant.
