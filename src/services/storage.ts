@@ -33,6 +33,21 @@ export interface PolicyCall {
   callSource: PriceSource;
 }
 
+export interface WalletWatch {
+  id: number;
+  discordUserId: string;
+  stakeKey: string;
+  displayAddress: string;
+  isEnterprise: boolean;
+  label: string | null;
+  createdAt: number;
+  lastNotifiedTxHash: string | null;
+  lastNotifiedAt: number | null;
+  dmDisabledUntil: number | null;
+}
+
+export type WalletWatchAction = 'add' | 'remove';
+
 export class StorageService {
   private readonly db: Database.Database;
 
@@ -82,6 +97,30 @@ export class StorageService {
         call_unit TEXT,
         call_source TEXT
       );
+    `);
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS wallet_watches (
+        id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+        discord_user_id        TEXT NOT NULL,
+        stake_key              TEXT NOT NULL,
+        display_address        TEXT NOT NULL,
+        is_enterprise          INTEGER NOT NULL DEFAULT 0,
+        label                  TEXT,
+        created_at             INTEGER NOT NULL,
+        last_notified_tx_hash  TEXT,
+        last_notified_at       INTEGER,
+        dm_disabled_until      INTEGER,
+        UNIQUE(discord_user_id, stake_key)
+      );
+      CREATE INDEX IF NOT EXISTS idx_wallet_watches_stake ON wallet_watches(stake_key);
+      CREATE INDEX IF NOT EXISTS idx_wallet_watches_user  ON wallet_watches(discord_user_id);
+
+      CREATE TABLE IF NOT EXISTS wallet_rate_limit (
+        discord_user_id  TEXT NOT NULL,
+        action           TEXT NOT NULL,
+        ts               INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_wallet_rate_limit_user_ts ON wallet_rate_limit(discord_user_id, ts);
     `);
     // Additive migrations for DBs that pre-date newer columns.
     const columns = this.db.prepare('PRAGMA table_info(policy_calls)').all() as Array<{ name: string }>;
@@ -249,5 +288,139 @@ export class StorageService {
     const cutoff = Date.now() - windowMs;
     const res = this.db.prepare('DELETE FROM recent_alerts WHERE alerted_at < ?').run(cutoff);
     if (res.changes > 0) logger.debug(`Cleared ${res.changes} expired alert debounce rows`);
+  }
+
+  // ============================================================================
+  // Wallet Watch CRUD Methods
+  // ============================================================================
+
+  private mapWalletWatchRow(row: any): WalletWatch {
+    return {
+      id: row.id,
+      discordUserId: row.discord_user_id,
+      stakeKey: row.stake_key,
+      displayAddress: row.display_address,
+      isEnterprise: Boolean(row.is_enterprise),
+      label: row.label ?? null,
+      createdAt: row.created_at,
+      lastNotifiedTxHash: row.last_notified_tx_hash ?? null,
+      lastNotifiedAt: row.last_notified_at ?? null,
+      dmDisabledUntil: row.dm_disabled_until ?? null,
+    };
+  }
+
+  addWalletWatch(params: {
+    userId: string;
+    stakeKey: string;
+    displayAddress: string;
+    isEnterprise: boolean;
+    baselineTxHash: string | null;
+    label?: string | null;
+  }): WalletWatch {
+    const now = Date.now();
+    const stmt = this.db.prepare(
+      `INSERT INTO wallet_watches
+         (discord_user_id, stake_key, display_address, is_enterprise,
+          label,
+          created_at, last_notified_tx_hash, last_notified_at, dm_disabled_until)
+       VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL)`,
+    );
+    const info = stmt.run(
+      params.userId,
+      params.stakeKey,
+      params.displayAddress,
+      params.isEnterprise ? 1 : 0,
+      params.label ?? null,
+      now,
+      params.baselineTxHash,
+    );
+    const row = this.db
+      .prepare(`SELECT * FROM wallet_watches WHERE id = ?`)
+      .get(info.lastInsertRowid);
+    return this.mapWalletWatchRow(row);
+  }
+
+  removeWalletWatch(userId: string, stakeKeyOrDisplay: string): boolean {
+    const stmt = this.db.prepare(
+      `DELETE FROM wallet_watches
+         WHERE discord_user_id = ?
+           AND (stake_key = ? OR display_address = ?)`,
+    );
+    const info = stmt.run(userId, stakeKeyOrDisplay, stakeKeyOrDisplay);
+    return info.changes > 0;
+  }
+
+  listWalletWatches(userId: string): WalletWatch[] {
+    const rows = this.db
+      .prepare(`SELECT * FROM wallet_watches WHERE discord_user_id = ? ORDER BY created_at ASC`)
+      .all(userId);
+    return rows.map((r) => this.mapWalletWatchRow(r));
+  }
+
+  countWalletWatches(userId: string): number {
+    const row = this.db
+      .prepare(`SELECT COUNT(*) as n FROM wallet_watches WHERE discord_user_id = ?`)
+      .get(userId) as { n: number };
+    return row.n;
+  }
+
+  // ============================================================================
+  // Poll-Driver Methods
+  // ============================================================================
+
+  distinctWatchedStakeKeys(): string[] {
+    const rows = this.db
+      .prepare(`SELECT DISTINCT stake_key FROM wallet_watches`)
+      .all() as Array<{ stake_key: string }>;
+    return rows.map((r) => r.stake_key);
+  }
+
+  getWatchesForStakeKey(stakeKey: string): WalletWatch[] {
+    const rows = this.db
+      .prepare(`SELECT * FROM wallet_watches WHERE stake_key = ?`)
+      .all(stakeKey);
+    return rows.map((r) => this.mapWalletWatchRow(r));
+  }
+
+  updateWatchAfterNotify(id: number, txHash: string, ts: number): void {
+    this.db
+      .prepare(
+        `UPDATE wallet_watches
+           SET last_notified_tx_hash = ?, last_notified_at = ?
+         WHERE id = ?`,
+      )
+      .run(txHash, ts, id);
+  }
+
+  setWatchDmCooldown(id: number, untilTs: number): void {
+    this.db
+      .prepare(`UPDATE wallet_watches SET dm_disabled_until = ? WHERE id = ?`)
+      .run(untilTs, id);
+  }
+
+  // ============================================================================
+  // Rate-Limit Methods
+  // ============================================================================
+
+  recordWatchAction(userId: string, action: WalletWatchAction): void {
+    this.db
+      .prepare(`INSERT INTO wallet_rate_limit (discord_user_id, action, ts) VALUES (?, ?, ?)`)
+      .run(userId, action, Date.now());
+  }
+
+  countRecentWatchActions(userId: string, action: WalletWatchAction, windowMs: number): number {
+    const row = this.db
+      .prepare(
+        `SELECT COUNT(*) as n FROM wallet_rate_limit
+           WHERE discord_user_id = ? AND action = ? AND ts > ?`,
+      )
+      .get(userId, action, Date.now() - windowMs) as { n: number };
+    return row.n;
+  }
+
+  cleanupWalletRateLimit(windowMs: number): void {
+    this.db
+      .prepare(`DELETE FROM wallet_rate_limit WHERE ts < ?`)
+      .run(Date.now() - windowMs);
   }
 }

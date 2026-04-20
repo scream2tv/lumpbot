@@ -5,7 +5,7 @@ import { registerMessageCreate } from './messageCreate';
 import { registerInteractionCreate } from './interactionCreate';
 
 export function registerEvents(client: Client, ctx: BotContext): void {
-  registerReady(client);
+  registerReady(client, ctx);
   registerMessageCreate(client, ctx);
   registerInteractionCreate(client, ctx);
 }

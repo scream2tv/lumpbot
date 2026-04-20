@@ -58,6 +58,9 @@ export interface LumpBotConfig {
   logging: {
     level: LogLevel;
   };
+  walletWatchChannelId: string;
+  verifiedWalletRoleId: string;
+  walletPollIntervalMs: number;
 }
 
 export function loadConfig(): LumpBotConfig {
@@ -99,5 +102,8 @@ export function loadConfig(): LumpBotConfig {
     logging: {
       level: logLevel,
     },
+    walletWatchChannelId: required('WALLET_WATCH_CHANNEL_ID'),
+    verifiedWalletRoleId: required('VERIFIED_WALLET_ROLE_ID'),
+    walletPollIntervalMs: Math.max(10000, Number(optional('WALLET_POLL_INTERVAL_MS', '30000')) || 30000),
   };
 }

@@ -24,6 +24,23 @@ export interface PolicyAssetSummary {
   totalSupplyLovelace: bigint | null;
 }
 
+export interface AccountTransaction {
+  txHash: string;
+  blockHeight: number;
+  blockTime: number;
+}
+
+export interface TxUtxoEntry {
+  address: string;
+  amount: Array<{ unit: string; quantity: string }>;
+}
+
+export interface TxUtxos {
+  hash: string;
+  inputs: TxUtxoEntry[];
+  outputs: TxUtxoEntry[];
+}
+
 interface KoiosAssetInfo {
   policy_id: string;
   asset_name: string;
@@ -205,6 +222,105 @@ export class BlockfrostService {
     } catch (err) {
       logger.debug(`Fingerprint lookup failed for ${fingerprint}`, err);
       return null;
+    }
+  }
+
+  /**
+   * Returns the bech32 stake address for a payment address, or null if
+   * the address is enterprise (no stake part) or unknown to Blockfrost.
+   * Throws on network / server errors.
+   */
+  async getStakeKeyForAddress(addr: string): Promise<string | null> {
+    try {
+      const res: any = await this.limiter.schedule(() => this.api.addresses(addr));
+      return res?.stake_address ?? null;
+    } catch (err: any) {
+      if (err?.status_code === 404) return null;
+      throw err;
+    }
+  }
+
+  /**
+   * Latest transactions for a stake account, newest first.
+   * count caps at 100 per Blockfrost; we typically pass 10.
+   *
+   * Blockfrost has no /accounts/{stake}/addresses/transactions endpoint.
+   * We fan out: list all payment addresses under the stake key, fetch
+   * transactions per address, dedupe by tx_hash, sort descending, return top N.
+   */
+  async getAccountTransactions(
+    stakeAddress: string,
+    opts: { count?: number } = {},
+  ): Promise<AccountTransaction[]> {
+    const count = Math.min(Math.max(opts.count ?? 10, 1), 100);
+
+    const addresses = await this.getAccountAddresses(stakeAddress);
+    if (addresses.length === 0) return [];
+
+    const perAddressResults = await Promise.all(
+      addresses.map((addr) =>
+        this.limiter.schedule(() =>
+          this.api.addressesTransactions(addr, { count, order: 'desc' }),
+        ),
+      ),
+    );
+
+    const seen = new Map<string, AccountTransaction>();
+    for (const rows of perAddressResults) {
+      for (const r of rows) {
+        if (!seen.has(r.tx_hash)) {
+          seen.set(r.tx_hash, {
+            txHash: r.tx_hash,
+            blockHeight: r.block_height,
+            blockTime: r.block_time,
+          });
+        }
+      }
+    }
+
+    return Array.from(seen.values())
+      .sort((a, b) => b.blockTime - a.blockTime)
+      .slice(0, count);
+  }
+
+  /**
+   * All payment addresses registered under a stake key. Used for
+   * membership tests when classifying tx direction.
+   */
+  async getAccountAddresses(stakeAddress: string): Promise<string[]> {
+    const rows: any[] = await this.limiter.schedule(() =>
+      this.api.accountsAddresses(stakeAddress, { count: 100 }),
+    );
+    return rows.map((r) => r.address);
+  }
+
+  async getTransactionUtxos(txHash: string): Promise<TxUtxos> {
+    const res: any = await this.limiter.schedule(() => this.api.txsUtxos(txHash));
+    return {
+      hash: res.hash,
+      inputs: (res.inputs ?? []).map((i: any) => ({
+        address: i.address,
+        amount: (i.amount ?? []).map((a: any) => ({ unit: a.unit, quantity: a.quantity })),
+      })),
+      outputs: (res.outputs ?? []).map((o: any) => ({
+        address: o.address,
+        amount: (o.amount ?? []).map((a: any) => ({ unit: a.unit, quantity: a.quantity })),
+      })),
+    };
+  }
+
+  /**
+   * Returns the network fee for a transaction in lovelace. The Blockfrost SDK
+   * method `txs(hash)` returns tx metadata including a `fees` string field.
+   */
+  async getTransactionFee(txHash: string): Promise<bigint> {
+    const res: any = await this.limiter.schedule(() => this.api.txs(txHash));
+    const raw = res?.fees;
+    if (raw == null) return 0n;
+    try {
+      return BigInt(String(raw));
+    } catch {
+      return 0n;
     }
   }
 }

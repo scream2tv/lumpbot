@@ -2,8 +2,9 @@ import { Collection } from 'discord.js';
 import { SlashCommand } from './types';
 import verify from './verify';
 import lookup from './lookup';
+import watch from './watch';
 
-export const commandList: SlashCommand[] = [verify, lookup];
+export const commandList: SlashCommand[] = [verify, lookup, watch];
 
 export function buildCommandCollection(): Collection<string, SlashCommand> {
   const collection = new Collection<string, SlashCommand>();

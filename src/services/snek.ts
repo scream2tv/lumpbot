@@ -76,6 +76,16 @@ export class SnekService {
     this.limiter = new RateLimiter({ name: 'snek', maxConcurrent: 3, minIntervalMs: 150 });
   }
 
+  async getAssetMeta(policyId: string, assetNameHex: string): Promise<{ ticker: string | null; logoCid: string | null } | null> {
+    const asset = `${policyId}.${assetNameHex}`;
+    const info = await this.fetchAssetInfo(asset);
+    if (!info) return null;
+    return {
+      ticker: info.ticker ?? null,
+      logoCid: ((info as any).logoCID ?? (info as any).logoCid) ?? null,
+    };
+  }
+
   async getStats(policyId: string, assetNameHex: string): Promise<SnekTokenStats | null> {
     const asset = `${policyId.toLowerCase()}.${assetNameHex.toLowerCase()}`;
     try {

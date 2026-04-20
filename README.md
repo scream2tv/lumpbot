@@ -191,6 +191,23 @@ WantedBy=multi-user.target
 | `/verify list` | Show all tracked policies |
 | `/lookup target:<policy_id or asset1…>` | Manually generate an embed for a policy or fingerprint |
 
+## Wallet watch
+
+Users can register Cardano wallet addresses in a designated channel and receive DMs when the wallet has on-chain activity.
+
+- `WALLET_WATCH_CHANNEL_ID` — the only channel where `/watch` works.
+- `VERIFIED_WALLET_ROLE_ID` — role that raises the per-user cap from 6 to 20 wallets.
+- `WALLET_POLL_INTERVAL_MS` — optional, how often to poll Blockfrost (default 30000, min 10000).
+
+Commands (all ephemeral, only work in the configured channel):
+- `/watch add <addr1…|stake1…>` — start watching. Payment addresses are normalized to the stake key so moves across all addresses in the wallet are detected. Enterprise addresses are watched as-is with a warning.
+- `/watch remove <addr1…|stake1…>` — stop watching.
+- `/watch list` — show your own watchlist (never anyone else's).
+
+DMs must be enabled for the bot. If a DM fails, that subscription is cooled down for 24 hours.
+
+No additional Discord intents are required. Sending DMs via `user.send()` works with the existing intent set.
+
 ## FDV and Snek.fun data
 
 The primary market stat in the embed and in the "first caller" footer is **FDV** (fully-diluted value), sourced from Snek.fun's `analytics.snek.fun` API. Specifically:
