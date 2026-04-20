@@ -46,4 +46,28 @@ assert.equal(tok.assetDeltas.length, 1);
 assert.equal(tok.assetDeltas[0].unit, 'abc123.534e454b');
 assert.equal(tok.assetDeltas[0].quantity, 1000000n);
 
+// hasScriptOutput detection: output to a script address.
+const scriptOut = classifyTx(
+  {
+    hash: 'hScript',
+    inputs: [{ address: 'addr1qmine', amount: [{ unit: 'lovelace', quantity: '5000000' }] }],
+    outputs: [
+      { address: 'addr1w8yz5mainswapscripthashxxxx', amount: [{ unit: 'lovelace', quantity: '4000000' }] },
+      { address: 'addr1qmine', amount: [{ unit: 'lovelace', quantity: '800000' }] },
+    ],
+  },
+  mine,
+);
+assert.equal(scriptOut.hasScriptOutput, true);
+
+const pureUser = classifyTx(
+  {
+    hash: 'hPure',
+    inputs: [{ address: 'addr1qmine', amount: [{ unit: 'lovelace', quantity: '5000000' }] }],
+    outputs: [{ address: 'addr1qother', amount: [{ unit: 'lovelace', quantity: '4500000' }] }],
+  },
+  mine,
+);
+assert.equal(pureUser.hasScriptOutput, false);
+
 console.log('classifyTx OK');

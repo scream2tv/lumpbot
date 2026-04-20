@@ -88,4 +88,30 @@ const dirB = { ...txB, direction: 'SELF' as const, txHash: 'dirB', blockTime: 40
 const dirGroups = groupMoves([dirA as any, dirB as any]);
 assert.equal(dirGroups.length, 2, 'different directions should not merge');
 
+// hasScriptOutput propagation: groups[0] from the first merge case should have hasScriptOutput === false
+// (neither txA nor txB has a script output).
+assert.equal(groups[0].hasScriptOutput, false, 'merged group with no script outputs should have hasScriptOutput false');
+
+// hasScriptOutput propagation: if any member has a script output, the group inherits true.
+const LUMP2 = '73797786382c0832b5787a5b306f5308488f14571b7061f79396ad2c4c756d70';
+const mineB = new Set(['addr1qmineB']);
+const withScript = classifyTx(
+  {
+    hash: 'hs1',
+    inputs: [{ address: 'addr1qmineB', amount: [{ unit: 'lovelace', quantity: '10000000' }] }],
+    outputs: [
+      { address: 'addr1w4scriptxxx', amount: [{ unit: 'lovelace', quantity: '9000000' }] },
+      { address: 'addr1qmineB', amount: [
+        { unit: 'lovelace', quantity: '500000' },
+        { unit: LUMP2, quantity: '100' },
+      ] },
+    ],
+  },
+  mineB,
+);
+withScript.blockTime = 9000;
+const groupsS = groupMoves([withScript]);
+assert.equal(groupsS.length, 1);
+assert.equal(groupsS[0].hasScriptOutput, true);
+
 console.log('grouping OK');

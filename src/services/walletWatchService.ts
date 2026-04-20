@@ -14,7 +14,19 @@ import { hexToUtf8Safe, truncateMiddle } from '../utils/formatters';
 
 const DM_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 const PER_WALLET_COOLDOWN_MS = 30_000;
-const BURST_COLLAPSE_THRESHOLD = 3;
+const BURST_COLLAPSE_THRESHOLD = 10;
+
+function isScriptAddress(addr: string): boolean {
+  // Cardano bech32 address prefixes that encode script payment credentials:
+  //   addr1w / addr_test1w  (type 6/7 — script, no stake)
+  //   addr1z / addr_test1z  (type 1/3/5 — script + stake/pointer)
+  return (
+    addr.startsWith('addr1w') ||
+    addr.startsWith('addr1z') ||
+    addr.startsWith('addr_test1w') ||
+    addr.startsWith('addr_test1z')
+  );
+}
 const ADDRESS_CACHE_TTL_MS = 60 * 60 * 1000;
 
 export type Direction = 'IN' | 'OUT' | 'SELF';
@@ -30,6 +42,7 @@ export interface ClassifiedMove {
   direction: Direction;
   lovelaceDelta: bigint;
   assetDeltas: AssetDelta[];
+  hasScriptOutput: boolean;    // NEW
 }
 
 export interface WalletMoveGroup {
@@ -39,6 +52,7 @@ export interface WalletMoveGroup {
   direction: Direction;
   lovelaceDelta: bigint;
   assetDeltas: AssetDelta[];
+  hasScriptOutput: boolean;    // NEW
 }
 
 export function classifyTx(utxos: TxUtxos, mine: Set<string>): ClassifiedMove {
@@ -74,14 +88,15 @@ export function classifyTx(utxos: TxUtxos, mine: Set<string>): ClassifiedMove {
       return aa > bb ? -1 : aa < bb ? 1 : 0;
     });
 
-  return { txHash: utxos.hash, blockTime: 0, direction, lovelaceDelta, assetDeltas };
+  const hasScriptOutput = utxos.outputs.some((o) => isScriptAddress(o.address));
+  return { txHash: utxos.hash, blockTime: 0, direction, lovelaceDelta, assetDeltas, hasScriptOutput };
 }
 
 export function groupMoves(classified: ClassifiedMove[]): WalletMoveGroup[] {
   const GROUP_WINDOW_SEC = 3;
 
   interface Builder {
-    members: Array<{ hash: string; blockTime: number; absLovelace: bigint; assetCount: number }>;
+    members: Array<{ hash: string; blockTime: number; absLovelace: bigint; assetCount: number; hasScriptOutput: boolean }>;
     direction: Direction;
     blockTime: number;
     lovelaceDelta: bigint;
@@ -100,7 +115,7 @@ export function groupMoves(classified: ClassifiedMove[]): WalletMoveGroup[] {
       (last.members.some((x) => x.assetCount > 0) || assetCount > 0);
 
     if (canMerge) {
-      last.members.push({ hash: m.txHash, blockTime: m.blockTime, absLovelace: absLov, assetCount });
+      last.members.push({ hash: m.txHash, blockTime: m.blockTime, absLovelace: absLov, assetCount, hasScriptOutput: m.hasScriptOutput });
       last.blockTime = Math.max(last.blockTime, m.blockTime);
       last.lovelaceDelta += m.lovelaceDelta;
       for (const a of m.assetDeltas) {
@@ -110,7 +125,7 @@ export function groupMoves(classified: ClassifiedMove[]): WalletMoveGroup[] {
       const totals = new Map<string, bigint>();
       for (const a of m.assetDeltas) totals.set(a.unit, a.quantity);
       builders.push({
-        members: [{ hash: m.txHash, blockTime: m.blockTime, absLovelace: absLov, assetCount }],
+        members: [{ hash: m.txHash, blockTime: m.blockTime, absLovelace: absLov, assetCount, hasScriptOutput: m.hasScriptOutput }],
         direction: m.direction,
         blockTime: m.blockTime,
         lovelaceDelta: m.lovelaceDelta,
@@ -141,6 +156,7 @@ export function groupMoves(classified: ClassifiedMove[]): WalletMoveGroup[] {
       direction: b.direction,
       lovelaceDelta: b.lovelaceDelta,
       assetDeltas,
+      hasScriptOutput: b.members.some((x) => x.hasScriptOutput),
     };
   });
 }
@@ -269,7 +285,7 @@ export class WalletWatchService {
 
       try {
         if (newTxs.length > BURST_COLLAPSE_THRESHOLD) {
-          await this.sendBurstSummary(sub, newTxs.length, newest.txHash);
+          await this.sendBurstSummary(sub, newTxs);
         } else {
           const mine = await this.getMineAddresses(sub);
           // Classify oldest-first
@@ -326,6 +342,7 @@ export class WalletWatchService {
       otherTxHashes,
       blockTime: group.blockTime,
       cardanoscanBase: this.cardanoscanBase,
+      hasScriptOutput: group.hasScriptOutput,
     };
 
     const user = await this.client.users.fetch(sub.discordUserId);
@@ -341,12 +358,11 @@ export class WalletWatchService {
 
   private async sendBurstSummary(
     sub: WalletWatch,
-    count: number,
-    latestTxHash: string,
+    txs: Array<{ txHash: string; blockTime: number }>,
   ): Promise<void> {
     const user = await this.client.users.fetch(sub.discordUserId);
     await user.send({
-      embeds: [buildBurstSummaryEmbed(sub.displayAddress, sub.label, count, latestTxHash, this.cardanoscanBase)],
+      embeds: [buildBurstSummaryEmbed(sub.displayAddress, sub.label, txs, this.cardanoscanBase)],
     });
   }
 }
