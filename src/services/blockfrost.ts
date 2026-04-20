@@ -55,6 +55,7 @@ export class BlockfrostService {
   private readonly limiter: RateLimiter;
   private readonly koios: AxiosInstance;
   private readonly koiosBaseUrl: string;
+  private readonly blockfrostBase: string;
 
   constructor(private readonly config: LumpBotConfig) {
     this.api = new BlockFrostAPI({
@@ -70,6 +71,12 @@ export class BlockfrostService {
         ? { Authorization: `Bearer ${config.koios.apiKey}` }
         : {},
     });
+    const networkMap: Record<string, string> = {
+      mainnet: 'https://cardano-mainnet.blockfrost.io/api/v0',
+      preprod: 'https://cardano-preprod.blockfrost.io/api/v0',
+      preview: 'https://cardano-preview.blockfrost.io/api/v0',
+    };
+    this.blockfrostBase = networkMap[config.blockfrost.network] ?? networkMap['mainnet'];
   }
 
   async getPolicySummary(policyId: string): Promise<PolicyAssetSummary | null> {
@@ -243,16 +250,27 @@ export class BlockfrostService {
   /**
    * Latest transactions for a stake account, newest first.
    * count caps at 100 per Blockfrost; we typically pass 10.
+   *
+   * NOTE: We bypass the SDK here because @blockfrost/blockfrost-js v5.7 does
+   * not wrap the /accounts/{stake_address}/addresses/transactions REST endpoint.
+   * Calling the SDK's addressesTransactions() with a stake key returns HTTP 400
+   * at runtime because that method expects a payment address. We call the REST
+   * API directly via axios instead.
    */
   async getAccountTransactions(
     stakeAddress: string,
     opts: { count?: number } = {},
   ): Promise<AccountTransaction[]> {
     const count = Math.min(Math.max(opts.count ?? 10, 1), 100);
-    const rows: any[] = await this.limiter.schedule(() =>
-      this.api.addressesTransactions(stakeAddress, { count, order: 'desc' }),
+    const url = `${this.blockfrostBase}/accounts/${stakeAddress}/addresses/transactions`;
+    const response = await this.limiter.schedule(() =>
+      axios.get<Array<{ tx_hash: string; block_height: number; block_time: number; tx_index?: number; epoch_no?: number }>>(url, {
+        params: { count, order: 'desc' },
+        headers: { project_id: this.config.blockfrost.apiKey },
+        timeout: 15_000,
+      }),
     );
-    return rows.map((r) => ({
+    return response.data.map((r) => ({
       txHash: r.tx_hash,
       blockHeight: r.block_height,
       blockTime: r.block_time,
