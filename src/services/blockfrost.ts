@@ -24,6 +24,23 @@ export interface PolicyAssetSummary {
   totalSupplyLovelace: bigint | null;
 }
 
+export interface AccountTransaction {
+  txHash: string;
+  blockHeight: number;
+  blockTime: number;
+}
+
+export interface TxUtxoEntry {
+  address: string;
+  amount: Array<{ unit: string; quantity: string }>;
+}
+
+export interface TxUtxos {
+  hash: string;
+  inputs: TxUtxoEntry[];
+  outputs: TxUtxoEntry[];
+}
+
 interface KoiosAssetInfo {
   policy_id: string;
   asset_name: string;
@@ -206,6 +223,66 @@ export class BlockfrostService {
       logger.debug(`Fingerprint lookup failed for ${fingerprint}`, err);
       return null;
     }
+  }
+
+  /**
+   * Returns the bech32 stake address for a payment address, or null if
+   * the address is enterprise (no stake part) or unknown to Blockfrost.
+   * Throws on network / server errors.
+   */
+  async getStakeKeyForAddress(addr: string): Promise<string | null> {
+    try {
+      const res: any = await this.limiter.schedule(() => this.api.addresses(addr));
+      return res?.stake_address ?? null;
+    } catch (err: any) {
+      if (err?.status_code === 404) return null;
+      throw err;
+    }
+  }
+
+  /**
+   * Latest transactions for a stake account, newest first.
+   * count caps at 100 per Blockfrost; we typically pass 10.
+   */
+  async getAccountTransactions(
+    stakeAddress: string,
+    opts: { count?: number } = {},
+  ): Promise<AccountTransaction[]> {
+    const count = Math.min(Math.max(opts.count ?? 10, 1), 100);
+    const rows: any[] = await this.limiter.schedule(() =>
+      this.api.addressesTransactions(stakeAddress, { count, order: 'desc' }),
+    );
+    return rows.map((r) => ({
+      txHash: r.tx_hash,
+      blockHeight: r.block_height,
+      blockTime: r.block_time,
+    }));
+  }
+
+  /**
+   * All payment addresses registered under a stake key. Used for
+   * membership tests when classifying tx direction.
+   */
+  async getAccountAddresses(stakeAddress: string): Promise<string[]> {
+    const rows: any[] = await this.limiter.schedule(() =>
+      this.api.accountsAddresses(stakeAddress, { count: 100 }),
+    );
+    return rows.map((r) => r.address);
+  }
+
+  async getTransactionUtxos(txHash: string): Promise<TxUtxos> {
+    const res: any = await this.limiter.schedule(() => this.api.txsUtxos(txHash));
+    return {
+      hash: res.hash,
+      inputs: (res.inputs ?? []).map((i: any) => ({
+        address: i.address,
+        amount: (i.amount ?? []).map((a: any) => ({ unit: a.unit, quantity: a.quantity })),
+      })),
+      outputs: (res.outputs ?? []).map((o: any) => ({
+        address: o.address,
+        amount: (o.amount ?? []).map((a: any) => ({ unit: a.unit, quantity: a.quantity })),
+      })),
+    };
   }
 }
 
