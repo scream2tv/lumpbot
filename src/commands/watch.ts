@@ -8,6 +8,15 @@ import { BotContext } from '../botContext';
 import { parseCardanoAddress, shortenAddress } from '../utils/cardanoAddress';
 import { logger } from '../utils/logger';
 
+function normalizeLabel(raw: string | null): string | null {
+  if (!raw) return null;
+  // strip control chars, trim
+  const cleaned = raw.replace(/[\x00-\x1f\x7f]/g, '').trim();
+  if (cleaned.length === 0) return null;
+  if (cleaned.length > 32) return cleaned.slice(0, 32);
+  return cleaned;
+}
+
 const data = new SlashCommandBuilder()
   .setName('watch')
   .setDescription('Watch a Cardano wallet and get DM alerts when it moves')
@@ -18,6 +27,13 @@ const data = new SlashCommandBuilder()
       .setDescription('Add a wallet address to your watch list')
       .addStringOption((o) =>
         o.setName('address').setDescription('addr1… or stake1…').setRequired(true),
+      )
+      .addStringOption((o) =>
+        o
+          .setName('label')
+          .setDescription("Friendly name (e.g. 'My main wallet')")
+          .setRequired(false)
+          .setMaxLength(32),
       ),
   )
   .addSubcommand((sub) =>
@@ -62,6 +78,7 @@ async function handleAdd(
   ctx.storage.recordWatchAction(userId, 'add');
 
   const raw = interaction.options.getString('address', true);
+  const label = normalizeLabel(interaction.options.getString('label'));
   const parsed = parseCardanoAddress(raw);
   if (!parsed) {
     await interaction.reply({
@@ -134,6 +151,7 @@ async function handleAdd(
       displayAddress: parsed.raw,
       isEnterprise,
       baselineTxHash,
+      label,
     });
   } catch (err: any) {
     if (err?.code === 'SQLITE_CONSTRAINT_UNIQUE') {
@@ -150,7 +168,7 @@ async function handleAdd(
     : '';
 
   await interaction.editReply(
-    `✅ Watching ${shortenAddress(parsed.raw)}. You'll get a DM in this account when it moves.` +
+    `✅ Watching ${label ? `**${label}** (${shortenAddress(parsed.raw)})` : shortenAddress(parsed.raw)}. You'll get a DM in this account when it moves.` +
       `${enterpriseNote}${neverActiveNote}`,
   );
 }
@@ -210,7 +228,10 @@ async function handleList(
       ago < 60 ? `${ago}m ago` :
       ago < 60 * 24 ? `${Math.round(ago / 60)}h ago` :
       `${Math.round(ago / (60 * 24))}d ago`;
-    return `• ${shortenAddress(r.displayAddress)} — added ${when}`;
+    const name = r.label
+      ? `**${r.label}** (${shortenAddress(r.displayAddress)})`
+      : shortenAddress(r.displayAddress);
+    return `• ${name} — added ${when}`;
   });
   const header = `You're watching ${rows.length}/${cap} wallets.`;
   await interaction.reply({ content: `${header}\n${lines.join('\n')}`, ephemeral: true });

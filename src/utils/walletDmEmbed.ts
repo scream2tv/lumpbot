@@ -10,6 +10,7 @@ export interface WalletAssetDelta {
 
 export interface WalletMoveEvent {
   displayAddress: string;
+  label: string | null;
   direction: 'IN' | 'OUT' | 'SELF';
   lovelaceDelta: bigint;
   assetDeltas: WalletAssetDelta[];
@@ -20,9 +21,10 @@ export interface WalletMoveEvent {
 
 export interface GroupedMoveEvent {
   displayAddress: string;
+  label: string | null;
   direction: 'IN' | 'OUT' | 'SELF';
   lovelaceDelta: bigint;
-  assetDeltas: Array<{ unit: string; quantity: bigint; ticker: string; logoCid: string | null }>;
+  assetDeltas: Array<{ unit: string; quantity: bigint; ticker: string; logoCid: string | null; dhUnit: string | null }>;
   primaryTxHash: string;
   otherTxHashes: string[];     // excludes primary
   blockTime: number;
@@ -34,6 +36,10 @@ const DIRECTION_LABEL = {
   OUT:  '➡️ OUT',
   SELF: '🔁 SELF',
 } as const;
+
+function labelOrShort(label: string | null, displayAddress: string): string {
+  return label ?? shortenAddress(displayAddress);
+}
 
 function formatSignedAda(lovelace: bigint): string {
   const negative = lovelace < 0n;
@@ -66,7 +72,7 @@ function formatAssetLine(d: WalletAssetDelta): string {
 }
 
 export function buildWalletMoveEmbed(evt: WalletMoveEvent): EmbedBuilder {
-  const short = shortenAddress(evt.displayAddress);
+  const short = labelOrShort(evt.label, evt.displayAddress);
   const embed = new EmbedBuilder()
     .setColor(0x5865f2)
     .setTitle(`💸 Wallet moved — ${short}`)
@@ -100,11 +106,12 @@ export function buildWalletMovePlaintext(evt: WalletMoveEvent): string {
 
 export function buildBurstSummaryEmbed(
   displayAddress: string,
+  label: string | null,
   count: number,
   latestTxHash: string,
   cardanoscanBase: string,
 ): EmbedBuilder {
-  const short = shortenAddress(displayAddress);
+  const short = labelOrShort(label, displayAddress);
   return new EmbedBuilder()
     .setColor(0x5865f2)
     .setTitle(`💸 ${count} moves — ${short}`)
@@ -117,7 +124,7 @@ export function buildBurstSummaryEmbed(
  * - Transfer variant: pure ADA move, keeps existing layout.
  */
 export function buildGroupedMoveEmbed(evt: GroupedMoveEvent): EmbedBuilder {
-  const short = shortenAddress(evt.displayAddress);
+  const short = labelOrShort(evt.label, evt.displayAddress);
   const hasAssets = evt.assetDeltas.length > 0;
 
   if (hasAssets) {
@@ -163,10 +170,13 @@ function buildSwapEmbed(evt: GroupedMoveEvent, short: string): EmbedBuilder {
     embed.setThumbnail(`https://ipfs.io/ipfs/${withLogo.logoCid}`);
   }
 
-  embed.addFields({
-    name: 'Tx',
-    value: `[cardanoscan](${evt.cardanoscanBase}/transaction/${evt.primaryTxHash})`,
-  });
+  const txLinks = [`[Cardanoscan](${evt.cardanoscanBase}/transaction/${evt.primaryTxHash})`];
+  const firstDhUnit = evt.assetDeltas.find((a) => a.dhUnit)?.dhUnit;
+  if (firstDhUnit) {
+    const cleanUnit = firstDhUnit.replace('.', '');
+    txLinks.push(`[DexHunter](https://app.dexhunter.io/trade/${cleanUnit})`);
+  }
+  embed.addFields({ name: 'Tx', value: txLinks.join(' · ') });
 
   if (evt.otherTxHashes.length > 0) {
     const spoilerHashes = evt.otherTxHashes.map((h) => truncateMiddle(h, 8, 6)).join(', ');

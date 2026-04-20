@@ -104,6 +104,6 @@ export function loadConfig(): LumpBotConfig {
     },
     walletWatchChannelId: required('WALLET_WATCH_CHANNEL_ID'),
     verifiedWalletRoleId: required('VERIFIED_WALLET_ROLE_ID'),
-    walletPollIntervalMs: Math.max(30000, Number(optional('WALLET_POLL_INTERVAL_MS', '60000')) || 60000),
+    walletPollIntervalMs: Math.max(10000, Number(optional('WALLET_POLL_INTERVAL_MS', '30000')) || 30000),
   };
 }

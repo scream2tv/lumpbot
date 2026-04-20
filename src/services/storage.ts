@@ -315,19 +315,22 @@ export class StorageService {
     displayAddress: string;
     isEnterprise: boolean;
     baselineTxHash: string | null;
+    label?: string | null;
   }): WalletWatch {
     const now = Date.now();
     const stmt = this.db.prepare(
       `INSERT INTO wallet_watches
          (discord_user_id, stake_key, display_address, is_enterprise,
+          label,
           created_at, last_notified_tx_hash, last_notified_at, dm_disabled_until)
-       VALUES (?, ?, ?, ?, ?, ?, NULL, NULL)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL)`,
     );
     const info = stmt.run(
       params.userId,
       params.stakeKey,
       params.displayAddress,
       params.isEnterprise ? 1 : 0,
+      params.label ?? null,
       now,
       params.baselineTxHash,
     );

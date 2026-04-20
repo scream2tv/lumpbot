@@ -197,7 +197,7 @@ Users can register Cardano wallet addresses in a designated channel and receive 
 
 - `WALLET_WATCH_CHANNEL_ID` — the only channel where `/watch` works.
 - `VERIFIED_WALLET_ROLE_ID` — role that raises the per-user cap from 6 to 20 wallets.
-- `WALLET_POLL_INTERVAL_MS` — optional, how often to poll Blockfrost (default 60000, min 30000).
+- `WALLET_POLL_INTERVAL_MS` — optional, how often to poll Blockfrost (default 30000, min 10000).
 
 Commands (all ephemeral, only work in the configured channel):
 - `/watch add <addr1…|stake1…>` — start watching. Payment addresses are normalized to the stake key so moves across all addresses in the wallet are detected. Enterprise addresses are watched as-is with a warning.

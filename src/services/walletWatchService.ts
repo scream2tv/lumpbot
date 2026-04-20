@@ -2,13 +2,14 @@ import { Client, DiscordAPIError } from 'discord.js';
 import { StorageService, WalletWatch } from './storage';
 import { BlockfrostService, TxUtxos } from './blockfrost';
 import { SnekService } from './snek';
+import { DexHunterService } from './dexhunter';
 import { logger } from '../utils/logger';
 import {
   buildBurstSummaryEmbed,
   buildGroupedMoveEmbed,
   GroupedMoveEvent,
 } from '../utils/walletDmEmbed';
-import { splitCardanoUnit } from '../utils/cardanoAddress';
+import { splitCardanoUnit, shortenAddress } from '../utils/cardanoAddress';
 import { hexToUtf8Safe, truncateMiddle } from '../utils/formatters';
 
 const DM_COOLDOWN_MS = 24 * 60 * 60 * 1000;
@@ -145,7 +146,7 @@ export function groupMoves(classified: ClassifiedMove[]): WalletMoveGroup[] {
 }
 
 interface CacheEntry { addrs: Set<string>; at: number }
-interface TickerCacheEntry { ticker: string; logoCid: string | null; at: number }
+interface TickerCacheEntry { ticker: string; logoCid: string | null; dhUnit: string | null; at: number }
 
 export class WalletWatchService {
   private addressCache = new Map<string, CacheEntry>();
@@ -156,6 +157,7 @@ export class WalletWatchService {
     private readonly storage: StorageService,
     private readonly blockfrost: BlockfrostService,
     private readonly snek: SnekService,
+    private readonly dexhunter: DexHunterService,
     private readonly client: Client,
     private readonly cardanoscanBase: string,
   ) {}
@@ -185,16 +187,17 @@ export class WalletWatchService {
     return false;
   }
 
-  private async resolveTicker(unit: string): Promise<{ ticker: string; logoCid: string | null }> {
+  private async resolveTicker(unit: string): Promise<{ ticker: string; logoCid: string | null; dhUnit: string | null }> {
     const cached = this.tickerCache.get(unit);
     if (cached && Date.now() - cached.at < this.TICKER_TTL_MS) {
-      return { ticker: cached.ticker, logoCid: cached.logoCid };
+      return { ticker: cached.ticker, logoCid: cached.logoCid, dhUnit: cached.dhUnit };
     }
-
     const { policyId, assetNameHex } = splitCardanoUnit(unit);
     let ticker: string | null = null;
     let logoCid: string | null = null;
+    let dhUnit: string | null = null;
 
+    // 1. Snek (authoritative for snek.fun; gives logo)
     try {
       const meta = await this.snek.getAssetMeta(policyId, assetNameHex);
       if (meta) {
@@ -205,13 +208,35 @@ export class WalletWatchService {
       logger.warn('snek getAssetMeta failed', { unit, err });
     }
 
+    // 2. DexHunter fallback (policy-scoped; verify unit match when DH returns one)
+    if (!ticker) {
+      try {
+        const stats = await this.dexhunter.getStatsByPolicyId(policyId);
+        if (stats) {
+          const stripped = (stats.unit ?? '').replace('.', '');
+          const target = unit.replace('.', '');
+          // Accept the DH ticker when either: DH has no unit field, or its unit matches ours
+          // (same policy + same asset name).
+          if (!stats.unit || stripped === target) {
+            ticker = stats.ticker ?? stats.name ?? null;
+            dhUnit = stats.unit ?? unit;
+          }
+        }
+      } catch (err) {
+        logger.warn('dexhunter getStatsByPolicyId failed', { unit, err });
+      }
+    }
+
+    // 3. Hex-decoded asset name (printable ASCII only)
     if (!ticker) {
       const decoded = hexToUtf8Safe(assetNameHex);
       if (decoded && /^[\x20-\x7e]+$/.test(decoded)) ticker = decoded;
     }
+
+    // 4. Final NFT fallback
     if (!ticker) ticker = `NFT ${truncateMiddle(policyId, 6, 4)}`;
 
-    const result = { ticker, logoCid };
+    const result = { ticker, logoCid, dhUnit };
     this.tickerCache.set(unit, { ...result, at: Date.now() });
     return result;
   }
@@ -280,13 +305,20 @@ export class WalletWatchService {
     const enriched = await Promise.all(
       group.assetDeltas.map(async (d) => {
         const meta = await this.resolveTicker(d.unit);
-        return { unit: d.unit, quantity: d.quantity, ticker: meta.ticker, logoCid: meta.logoCid };
+        return {
+          unit: d.unit,
+          quantity: d.quantity,
+          ticker: meta.ticker,
+          logoCid: meta.logoCid,
+          dhUnit: meta.dhUnit,
+        };
       }),
     );
 
     const otherTxHashes = group.txHashes.filter((h) => h !== group.primaryTxHash);
     const evt: GroupedMoveEvent = {
       displayAddress: sub.displayAddress,
+      label: sub.label,
       direction: group.direction,
       lovelaceDelta: group.lovelaceDelta,
       assetDeltas: enriched,
@@ -301,7 +333,9 @@ export class WalletWatchService {
       await user.send({ embeds: [buildGroupedMoveEmbed(evt)] });
     } catch (err) {
       if (this.isDmBlockedError(err)) throw err;
-      await user.send(`💸 Wallet ${this.cardanoscanBase}/transaction/${group.primaryTxHash}`);
+      await user.send(
+        `💸 ${sub.label ?? shortenAddress(sub.displayAddress)} — ${this.cardanoscanBase}/transaction/${group.primaryTxHash}`,
+      );
     }
   }
 
@@ -312,7 +346,7 @@ export class WalletWatchService {
   ): Promise<void> {
     const user = await this.client.users.fetch(sub.discordUserId);
     await user.send({
-      embeds: [buildBurstSummaryEmbed(sub.displayAddress, count, latestTxHash, this.cardanoscanBase)],
+      embeds: [buildBurstSummaryEmbed(sub.displayAddress, sub.label, count, latestTxHash, this.cardanoscanBase)],
     });
   }
 }

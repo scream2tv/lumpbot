@@ -47,6 +47,7 @@ async function main(): Promise<void> {
     storage,
     blockfrost,
     snek,
+    dexhunter,
     client,
     cardanoscanBase,
   );
