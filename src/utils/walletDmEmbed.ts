@@ -173,7 +173,9 @@ function buildSwapEmbed(evt: GroupedMoveEvent, short: string): EmbedBuilder {
     embed.addFields({ name: 'Also', value: `||${spoilerHashes}||` });
   }
 
-  embed.setTimestamp(new Date(evt.blockTime * 1000));
+  if (evt.blockTime > 0) {
+    embed.setTimestamp(new Date(evt.blockTime * 1000));
+  }
   return embed;
 }
 
