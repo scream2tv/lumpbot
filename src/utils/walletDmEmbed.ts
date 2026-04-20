@@ -24,6 +24,7 @@ export interface GroupedMoveEvent {
   label: string | null;
   direction: 'IN' | 'OUT' | 'SELF';
   lovelaceDelta: bigint;
+  feeLovelace: bigint;          // NEW
   assetDeltas: Array<{ unit: string; quantity: bigint; ticker: string; logoCid: string | null; dhUnit: string | null }>;
   primaryTxHash: string;
   otherTxHashes: string[];     // excludes primary
@@ -161,6 +162,13 @@ function formatSignedAdaLine(lovelace: bigint): string {
   return `${sign}${formatAda(ada, 2)} ADA`;
 }
 
+function formatSignedAdaLineWithFee(lovelace: bigint, feeLovelace: bigint): string {
+  const base = formatSignedAdaLine(lovelace);
+  if (feeLovelace <= 0n) return base;
+  const fee = Number(feeLovelace) / 1_000_000;
+  return `${base} (incl. ${formatAda(fee, 2)} fee)`;
+}
+
 function buildSwapEmbed(evt: GroupedMoveEvent, kind: 'BUY' | 'SELL'): EmbedBuilder {
   const color = kind === 'BUY' ? 0x2ecc71 : 0xe74c3c;
   const emoji = kind === 'BUY' ? '🟢' : '🔴';
@@ -183,7 +191,7 @@ function buildSwapEmbed(evt: GroupedMoveEvent, kind: 'BUY' | 'SELL'): EmbedBuild
   });
   if (more > 0) assetLines.push(`(+${more} more)`);
 
-  const descLines = [...assetLines, formatSignedAdaLine(evt.lovelaceDelta)];
+  const descLines = [...assetLines, formatSignedAdaLineWithFee(evt.lovelaceDelta, evt.feeLovelace)];
 
   const embed = new EmbedBuilder()
     .setColor(color)
@@ -215,7 +223,7 @@ function buildTransferEmbed(evt: GroupedMoveEvent): EmbedBuilder {
     .setTitle(`💸 Wallet moved — ${labelOrShort(evt.label, evt.displayAddress)}`)
     .addFields(
       { name: 'Direction', value: DIRECTION_LABEL[evt.direction], inline: true },
-      { name: 'Net ADA',   value: formatSignedAdaLine(evt.lovelaceDelta), inline: true },
+      { name: 'Net ADA',   value: formatSignedAdaLineWithFee(evt.lovelaceDelta, evt.feeLovelace), inline: true },
     );
 
   if (evt.assetDeltas.length > 0) {

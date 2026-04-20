@@ -53,6 +53,7 @@ export interface WalletMoveGroup {
   lovelaceDelta: bigint;
   assetDeltas: AssetDelta[];
   hasScriptOutput: boolean;    // NEW
+  feeLovelace: bigint;          // NEW — sum of network fees across member txs
 }
 
 export function classifyTx(utxos: TxUtxos, mine: Set<string>): ClassifiedMove {
@@ -157,6 +158,7 @@ export function groupMoves(classified: ClassifiedMove[]): WalletMoveGroup[] {
       lovelaceDelta: b.lovelaceDelta,
       assetDeltas,
       hasScriptOutput: b.members.some((x) => x.hasScriptOutput),
+      feeLovelace: 0n,
     };
   });
 }
@@ -299,7 +301,15 @@ export class WalletWatchService {
           }
           const groups = groupMoves(classified);
           for (const g of groups) {
-            await this.sendGroupedMoveDm(sub, g);
+            let feeLovelace = 0n;
+            for (const h of g.txHashes) {
+              try {
+                feeLovelace += await this.blockfrost.getTransactionFee(h);
+              } catch (err) {
+                logger.warn('getTransactionFee failed, treating as 0', { hash: h, err });
+              }
+            }
+            await this.sendGroupedMoveDm(sub, { ...g, feeLovelace });
           }
         }
         this.storage.updateWatchAfterNotify(sub.id, newest.txHash, Date.now());
@@ -337,6 +347,7 @@ export class WalletWatchService {
       label: sub.label,
       direction: group.direction,
       lovelaceDelta: group.lovelaceDelta,
+      feeLovelace: group.feeLovelace,
       assetDeltas: enriched,
       primaryTxHash: group.primaryTxHash,
       otherTxHashes,

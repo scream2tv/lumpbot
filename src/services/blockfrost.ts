@@ -308,6 +308,21 @@ export class BlockfrostService {
       })),
     };
   }
+
+  /**
+   * Returns the network fee for a transaction in lovelace. The Blockfrost SDK
+   * method `txs(hash)` returns tx metadata including a `fees` string field.
+   */
+  async getTransactionFee(txHash: string): Promise<bigint> {
+    const res: any = await this.limiter.schedule(() => this.api.txs(txHash));
+    const raw = res?.fees;
+    if (raw == null) return 0n;
+    try {
+      return BigInt(String(raw));
+    } catch {
+      return 0n;
+    }
+  }
 }
 
 // Re-exported for downstream consumers that want to format lovelace values.
