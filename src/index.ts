@@ -46,6 +46,7 @@ async function main(): Promise<void> {
   const walletWatchService = new WalletWatchService(
     storage,
     blockfrost,
+    snek,
     client,
     cardanoscanBase,
   );

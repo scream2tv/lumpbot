@@ -39,3 +39,15 @@ export function shortenAddress(bech32: string): string {
   if (bech32.length <= 18) return bech32;
   return `${bech32.slice(0, 10)}…${bech32.slice(-6)}`;
 }
+
+/**
+ * Splits a Blockfrost/Cardano asset unit into its constituent parts.
+ * Blockfrost uses both dotted format (`{policyId}.{assetNameHex}`) and
+ * contiguous format (`{policyId}{assetNameHex}` — 56 hex chars for policy ID).
+ */
+export function splitCardanoUnit(unit: string): { policyId: string; assetNameHex: string } {
+  const dot = unit.indexOf('.');
+  if (dot >= 0) return { policyId: unit.slice(0, dot), assetNameHex: unit.slice(dot + 1) };
+  if (unit.length >= 56) return { policyId: unit.slice(0, 56), assetNameHex: unit.slice(56) };
+  return { policyId: unit, assetNameHex: '' };
+}

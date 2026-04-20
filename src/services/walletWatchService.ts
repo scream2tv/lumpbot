@@ -1,13 +1,15 @@
 import { Client, DiscordAPIError } from 'discord.js';
 import { StorageService, WalletWatch } from './storage';
 import { BlockfrostService, TxUtxos } from './blockfrost';
+import { SnekService } from './snek';
 import { logger } from '../utils/logger';
 import {
-  buildWalletMoveEmbed,
-  buildWalletMovePlaintext,
   buildBurstSummaryEmbed,
-  WalletMoveEvent,
+  buildGroupedMoveEmbed,
+  GroupedMoveEvent,
 } from '../utils/walletDmEmbed';
+import { splitCardanoUnit } from '../utils/cardanoAddress';
+import { hexToUtf8Safe, truncateMiddle } from '../utils/formatters';
 
 const DM_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 const PER_WALLET_COOLDOWN_MS = 30_000;
@@ -23,6 +25,15 @@ export interface AssetDelta {
 
 export interface ClassifiedMove {
   txHash: string;
+  blockTime: number;
+  direction: Direction;
+  lovelaceDelta: bigint;
+  assetDeltas: AssetDelta[];
+}
+
+export interface WalletMoveGroup {
+  txHashes: string[];
+  primaryTxHash: string;
   blockTime: number;
   direction: Direction;
   lovelaceDelta: bigint;
@@ -65,14 +76,86 @@ export function classifyTx(utxos: TxUtxos, mine: Set<string>): ClassifiedMove {
   return { txHash: utxos.hash, blockTime: 0, direction, lovelaceDelta, assetDeltas };
 }
 
+export function groupMoves(classified: ClassifiedMove[]): WalletMoveGroup[] {
+  const GROUP_WINDOW_SEC = 3;
+
+  interface Builder {
+    members: Array<{ hash: string; blockTime: number; absLovelace: bigint; assetCount: number }>;
+    direction: Direction;
+    blockTime: number;
+    lovelaceDelta: bigint;
+    totals: Map<string, bigint>;
+  }
+
+  const builders: Builder[] = [];
+  for (const m of classified) {
+    const last = builders[builders.length - 1];
+    const absLov = m.lovelaceDelta < 0n ? -m.lovelaceDelta : m.lovelaceDelta;
+    const assetCount = m.assetDeltas.length;
+    const canMerge =
+      last &&
+      last.direction === m.direction &&
+      Math.abs(last.blockTime - m.blockTime) <= GROUP_WINDOW_SEC &&
+      (last.members.some((x) => x.assetCount > 0) || assetCount > 0);
+
+    if (canMerge) {
+      last.members.push({ hash: m.txHash, blockTime: m.blockTime, absLovelace: absLov, assetCount });
+      last.blockTime = Math.max(last.blockTime, m.blockTime);
+      last.lovelaceDelta += m.lovelaceDelta;
+      for (const a of m.assetDeltas) {
+        last.totals.set(a.unit, (last.totals.get(a.unit) ?? 0n) + a.quantity);
+      }
+    } else {
+      const totals = new Map<string, bigint>();
+      for (const a of m.assetDeltas) totals.set(a.unit, a.quantity);
+      builders.push({
+        members: [{ hash: m.txHash, blockTime: m.blockTime, absLovelace: absLov, assetCount }],
+        direction: m.direction,
+        blockTime: m.blockTime,
+        lovelaceDelta: m.lovelaceDelta,
+        totals,
+      });
+    }
+  }
+
+  return builders.map((b) => {
+    const primary = [...b.members].sort((x, y) => {
+      if (x.assetCount !== y.assetCount) return y.assetCount - x.assetCount;
+      return x.absLovelace > y.absLovelace ? -1 : x.absLovelace < y.absLovelace ? 1 : 0;
+    })[0];
+
+    const assetDeltas = Array.from(b.totals.entries())
+      .filter(([, q]) => q !== 0n)
+      .map(([unit, quantity]) => ({ unit, quantity }))
+      .sort((a, z) => {
+        const aa = a.quantity < 0n ? -a.quantity : a.quantity;
+        const zz = z.quantity < 0n ? -z.quantity : z.quantity;
+        return aa > zz ? -1 : aa < zz ? 1 : 0;
+      });
+
+    return {
+      txHashes: b.members.map((x) => x.hash),
+      primaryTxHash: primary.hash,
+      blockTime: b.blockTime,
+      direction: b.direction,
+      lovelaceDelta: b.lovelaceDelta,
+      assetDeltas,
+    };
+  });
+}
+
 interface CacheEntry { addrs: Set<string>; at: number }
+interface TickerCacheEntry { ticker: string; logoCid: string | null; at: number }
 
 export class WalletWatchService {
   private addressCache = new Map<string, CacheEntry>();
+  private tickerCache = new Map<string, TickerCacheEntry>();
+  private readonly TICKER_TTL_MS = 5 * 60 * 1000;
 
   constructor(
     private readonly storage: StorageService,
     private readonly blockfrost: BlockfrostService,
+    private readonly snek: SnekService,
     private readonly client: Client,
     private readonly cardanoscanBase: string,
   ) {}
@@ -100,6 +183,37 @@ export class WalletWatchService {
       return err.code === 50007; // Cannot send messages to this user
     }
     return false;
+  }
+
+  private async resolveTicker(unit: string): Promise<{ ticker: string; logoCid: string | null }> {
+    const cached = this.tickerCache.get(unit);
+    if (cached && Date.now() - cached.at < this.TICKER_TTL_MS) {
+      return { ticker: cached.ticker, logoCid: cached.logoCid };
+    }
+
+    const { policyId, assetNameHex } = splitCardanoUnit(unit);
+    let ticker: string | null = null;
+    let logoCid: string | null = null;
+
+    try {
+      const meta = await this.snek.getAssetMeta(policyId, assetNameHex);
+      if (meta) {
+        ticker = meta.ticker;
+        logoCid = meta.logoCid;
+      }
+    } catch (err) {
+      logger.warn('snek getAssetMeta failed', { unit, err });
+    }
+
+    if (!ticker) {
+      const decoded = hexToUtf8Safe(assetNameHex);
+      if (decoded && /^[\x20-\x7e]+$/.test(decoded)) ticker = decoded;
+    }
+    if (!ticker) ticker = `NFT ${truncateMiddle(policyId, 6, 4)}`;
+
+    const result = { ticker, logoCid };
+    this.tickerCache.set(unit, { ...result, at: Date.now() });
+    return result;
   }
 
   async checkWallet(stakeKey: string): Promise<void> {
@@ -133,9 +247,18 @@ export class WalletWatchService {
           await this.sendBurstSummary(sub, newTxs.length, newest.txHash);
         } else {
           const mine = await this.getMineAddresses(sub);
-          // oldest-first so the cursor advances monotonically
-          for (const t of [...newTxs].reverse()) {
-            await this.sendMoveDm(sub, mine, t.txHash, t.blockTime);
+          // Classify oldest-first
+          const chrono = [...newTxs].reverse();
+          const classified: ClassifiedMove[] = [];
+          for (const t of chrono) {
+            const utxos = await this.blockfrost.getTransactionUtxos(t.txHash);
+            const c = classifyTx(utxos, mine);
+            c.blockTime = t.blockTime;
+            classified.push(c);
+          }
+          const groups = groupMoves(classified);
+          for (const g of groups) {
+            await this.sendGroupedMoveDm(sub, g);
           }
         }
         this.storage.updateWatchAfterNotify(sub.id, newest.txHash, Date.now());
@@ -153,31 +276,32 @@ export class WalletWatchService {
     }
   }
 
-  private async sendMoveDm(
-    sub: WalletWatch,
-    mine: Set<string>,
-    txHash: string,
-    blockTime: number,
-  ): Promise<void> {
-    const utxos = await this.blockfrost.getTransactionUtxos(txHash);
-    const classified = classifyTx(utxos, mine);
-    const evt: WalletMoveEvent = {
+  private async sendGroupedMoveDm(sub: WalletWatch, group: WalletMoveGroup): Promise<void> {
+    const enriched = await Promise.all(
+      group.assetDeltas.map(async (d) => {
+        const meta = await this.resolveTicker(d.unit);
+        return { unit: d.unit, quantity: d.quantity, ticker: meta.ticker, logoCid: meta.logoCid };
+      }),
+    );
+
+    const otherTxHashes = group.txHashes.filter((h) => h !== group.primaryTxHash);
+    const evt: GroupedMoveEvent = {
       displayAddress: sub.displayAddress,
-      direction: classified.direction,
-      lovelaceDelta: classified.lovelaceDelta,
-      assetDeltas: classified.assetDeltas.slice(0, 3),
-      txHash,
-      blockTime,
+      direction: group.direction,
+      lovelaceDelta: group.lovelaceDelta,
+      assetDeltas: enriched,
+      primaryTxHash: group.primaryTxHash,
+      otherTxHashes,
+      blockTime: group.blockTime,
       cardanoscanBase: this.cardanoscanBase,
     };
 
     const user = await this.client.users.fetch(sub.discordUserId);
     try {
-      await user.send({ embeds: [buildWalletMoveEmbed(evt)] });
+      await user.send({ embeds: [buildGroupedMoveEmbed(evt)] });
     } catch (err) {
       if (this.isDmBlockedError(err)) throw err;
-      // Embed failure but user reachable — fall back to plaintext once.
-      await user.send(buildWalletMovePlaintext(evt));
+      await user.send(`💸 Wallet ${this.cardanoscanBase}/transaction/${group.primaryTxHash}`);
     }
   }
 
@@ -192,3 +316,4 @@ export class WalletWatchService {
     });
   }
 }
+
