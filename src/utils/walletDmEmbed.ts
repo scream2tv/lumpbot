@@ -216,9 +216,10 @@ function buildSwapEmbed(evt: GroupedMoveEvent, kind: 'BUY' | 'SELL'): EmbedBuild
     const cleanUnit = firstDhUnit.replace('.', '');
     txLinks.push(`[DexHunter](https://app.dexhunter.io/trade/${cleanUnit})`);
   }
-  const firstSnekUnit = shownAssets.find((d) => d.snekUnit)?.snekUnit;
-  if (firstSnekUnit) {
-    txLinks.push(`[Snek](https://snek.fun/launch/${firstSnekUnit})`);
+  const firstSnekAsset = shownAssets.find((d) => d.snekUnit);
+  if (firstSnekAsset?.snekUnit) {
+    const { policyId, assetNameHex } = splitCardanoUnit(firstSnekAsset.snekUnit);
+    txLinks.push(`[Snek](https://snek.fun/token/${policyId}.${assetNameHex})`);
   }
   embed.addFields({ name: 'Tx', value: txLinks.join(' · ') });
 
