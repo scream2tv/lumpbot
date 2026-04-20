@@ -6,6 +6,8 @@ import { BlockfrostService } from './services/blockfrost';
 import { DexHunterService } from './services/dexhunter';
 import { SnekService } from './services/snek';
 import { AlertService } from './services/alertService';
+import { WalletWatchService } from './services/walletWatchService';
+import { WalletWatcher } from './services/walletWatcher';
 import { buildCommandCollection } from './commands';
 import { registerEvents } from './events';
 import { BotContext } from './botContext';
@@ -35,6 +37,25 @@ async function main(): Promise<void> {
 
   const alerts = new AlertService(client, config, storage, blockfrost, dexhunter, snek);
 
+  const cardanoscanBase = config.blockfrost.network === 'mainnet'
+    ? 'https://cardanoscan.io'
+    : config.blockfrost.network === 'preprod'
+      ? 'https://preprod.cardanoscan.io'
+      : 'https://preview.cardanoscan.io';
+
+  const walletWatchService = new WalletWatchService(
+    storage,
+    blockfrost,
+    dexhunter,
+    client,
+    cardanoscanBase,
+  );
+  const walletWatcher = new WalletWatcher(
+    storage,
+    walletWatchService,
+    config.walletPollIntervalMs,
+  );
+
   const ctx: BotContext = {
     config,
     storage,
@@ -42,19 +63,27 @@ async function main(): Promise<void> {
     dexhunter,
     snek,
     alerts,
+    walletWatchService,
+    walletWatcher,
     commands: buildCommandCollection(),
   };
 
   registerEvents(client, ctx);
 
+  walletWatcher.start();
+
   const cleanupInterval = setInterval(
-    () => storage.cleanupExpiredAlerts(24 * 60 * 60 * 1000),
+    () => {
+      storage.cleanupExpiredAlerts(24 * 60 * 60 * 1000);
+      storage.cleanupWalletRateLimit(60 * 60 * 1000);
+    },
     60 * 60 * 1000
   );
 
   const shutdown = async (signal: string): Promise<void> => {
     logger.info(`Received ${signal}, shutting down...`);
     clearInterval(cleanupInterval);
+    walletWatcher.stop();
     try {
       await client.destroy();
       storage.close();

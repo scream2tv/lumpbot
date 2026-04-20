@@ -5,6 +5,8 @@ import { BlockfrostService } from './services/blockfrost';
 import { DexHunterService } from './services/dexhunter';
 import { SnekService } from './services/snek';
 import { AlertService } from './services/alertService';
+import { WalletWatchService } from './services/walletWatchService';
+import { WalletWatcher } from './services/walletWatcher';
 import type { SlashCommand } from './commands/types';
 
 export interface BotContext {
@@ -14,5 +16,7 @@ export interface BotContext {
   dexhunter: DexHunterService;
   snek: SnekService;
   alerts: AlertService;
+  walletWatchService: WalletWatchService;
+  walletWatcher: WalletWatcher;
   commands: Collection<string, SlashCommand>;
 }
