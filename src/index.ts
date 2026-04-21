@@ -4,6 +4,7 @@ import { logger, setLogLevel } from './utils/logger';
 import { StorageService } from './services/storage';
 import { BlockfrostService } from './services/blockfrost';
 import { DexHunterService } from './services/dexhunter';
+import { DexHunterChartService } from './services/dexhunterChart';
 import { SnekService } from './services/snek';
 import { AlertService } from './services/alertService';
 import { WalletWatchService } from './services/walletWatchService';
@@ -24,6 +25,7 @@ async function main(): Promise<void> {
   const storage = new StorageService(config.storage.databasePath);
   const blockfrost = new BlockfrostService(config);
   const dexhunter = new DexHunterService(config);
+  const dexhunterChart = new DexHunterChartService(config);
   const snek = new SnekService(config);
 
   const client = new Client({
@@ -62,6 +64,7 @@ async function main(): Promise<void> {
     storage,
     blockfrost,
     dexhunter,
+    dexhunterChart,
     snek,
     alerts,
     walletWatchService,
