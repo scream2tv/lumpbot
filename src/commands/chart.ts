@@ -9,6 +9,7 @@ const LUMP_POLICY_ID = '73797786382c0832b5787a5b306f5308488f14571b7061f79396ad2c
 const LUMP_ASSET_NAME_HEX = '4c756d70';
 const LUMP_UNIT = `${LUMP_POLICY_ID}${LUMP_ASSET_NAME_HEX}`;
 const LUMP_TICKER = 'LUMP';
+const LUMP_PURPLE = 0x8b5cf6;
 
 interface PeriodSpec {
   label: string;
@@ -45,27 +46,20 @@ function candleMs(time: number): number {
   return time > 1e12 ? time : time * 1000;
 }
 
-function formatPrice(value: number, digits = 8): string {
-  if (!Number.isFinite(value)) return '0';
-  if (value === 0) return '0';
-  if (Math.abs(value) < 1) return value.toFixed(digits).replace(/0+$/, '').replace(/\.$/, '');
+function formatAdaPrice(value: number): string {
+  if (!Number.isFinite(value) || value === 0) return '0';
+  if (Math.abs(value) < 1) return value.toFixed(8).replace(/0+$/, '').replace(/\.$/, '');
   return value.toFixed(4);
 }
 
-async function getAdaUsd(): Promise<number | null> {
-  try {
-    const res = await axios.get<{ cardano?: { usd?: number } }>(
-      'https://api.coingecko.com/api/v3/simple/price',
-      { params: { ids: 'cardano', vs_currencies: 'usd' }, timeout: 6_000 }
-    );
-    return res.data?.cardano?.usd ?? null;
-  } catch (err) {
-    logger.debug('CoinGecko ADA/USD fetch failed', err);
-    return null;
-  }
+function formatVolume(value: number): string {
+  if (!Number.isFinite(value) || value === 0) return '0 ₳';
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M ₳`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K ₳`;
+  return `${value.toFixed(0)} ₳`;
 }
 
-function buildCandlestickConfig(candles: Candle[], spec: PeriodSpec, closeUsd: number | null): Record<string, unknown> {
+function buildCandlestickConfig(candles: Candle[], spec: PeriodSpec): Record<string, unknown> {
   const ohlc = candles.map((c) => ({
     x: candleMs(c.time),
     o: c.open,
@@ -73,13 +67,10 @@ function buildCandlestickConfig(candles: Candle[], spec: PeriodSpec, closeUsd: n
     l: c.low,
     c: c.close,
   }));
-  const volData = candles.map((c) => ({ x: candleMs(c.time), y: c.volume || 0 }));
-  const volColors = candles.map((c) =>
-    c.close >= c.open ? 'rgba(38,166,154,0.55)' : 'rgba(239,83,80,0.55)'
-  );
-  const maxVol = Math.max(1, ...volData.map((v) => v.y));
   const last = candles[candles.length - 1];
-  const closeLabel = `Close ₳${formatPrice(last.close)}${closeUsd !== null ? `  ≈  $${formatPrice(last.close * closeUsd, 8)} USD` : ''}`;
+  const first = candles[0];
+  const changePct = first.open > 0 ? ((last.close - first.open) / first.open) * 100 : 0;
+  const arrow = changePct >= 0 ? '▲' : '▼';
 
   return {
     type: 'candlestick',
@@ -89,37 +80,29 @@ function buildCandlestickConfig(candles: Candle[], spec: PeriodSpec, closeUsd: n
           label: `${LUMP_TICKER}/ADA`,
           data: ohlc,
           color: {
-            up: 'rgba(38,166,154,1)',
-            down: 'rgba(239,83,80,1)',
+            up: 'rgba(139,92,246,1)',
+            down: 'rgba(236,72,153,1)',
             unchanged: 'rgba(160,160,160,1)',
           },
           borderColor: {
-            up: 'rgba(38,166,154,1)',
-            down: 'rgba(239,83,80,1)',
+            up: 'rgba(139,92,246,1)',
+            down: 'rgba(236,72,153,1)',
             unchanged: 'rgba(160,160,160,1)',
           },
-          yAxisID: 'y',
-        },
-        {
-          label: 'Vol',
-          type: 'bar',
-          data: volData,
-          backgroundColor: volColors,
-          borderColor: volColors,
-          yAxisID: 'y1',
-          barPercentage: 0.9,
-          categoryPercentage: 1.0,
         },
       ],
     },
     options: {
-      layout: { padding: { top: 10, left: 10, right: 10, bottom: 10 } },
+      layout: { padding: { top: 14, left: 10, right: 10, bottom: 10 } },
       plugins: {
         title: {
           display: true,
-          text: [`${LUMP_TICKER} • ${spec.span} • ${spec.label} candles`, closeLabel],
-          color: '#e6e6e6',
-          font: { size: 14 },
+          text: [
+            `${LUMP_TICKER}/ADA  •  ${spec.span} · ${spec.label}`,
+            `Close ₳${formatAdaPrice(last.close)}   ${arrow} ${changePct.toFixed(2)}%`,
+          ],
+          color: '#ede9fe',
+          font: { size: 14, weight: 'bold' },
         },
         legend: { display: false },
       },
@@ -127,22 +110,16 @@ function buildCandlestickConfig(candles: Candle[], spec: PeriodSpec, closeUsd: n
         x: {
           type: 'time',
           time: { unit: spec.axisUnit, tooltipFormat: 'MMM d, HH:mm' },
-          ticks: { color: '#aaa', maxRotation: 0, autoSkipPadding: 16 },
-          grid: { color: 'rgba(255,255,255,0.06)' },
+          ticks: { color: '#a78bfa', maxRotation: 0, autoSkipPadding: 20 },
+          grid: { color: 'rgba(139,92,246,0.08)' },
         },
         y: {
-          position: 'left',
-          ticks: { color: '#aaa' },
-          grid: { color: 'rgba(255,255,255,0.06)' },
-          title: { display: true, text: 'Price (₳)', color: '#aaa' },
-        },
-        y1: {
           position: 'right',
-          beginAtZero: true,
-          suggestedMax: maxVol * 4,
-          grid: { display: false },
-          ticks: { color: '#666' },
-          title: { display: true, text: 'Vol (₳)', color: '#666' },
+          ticks: {
+            color: '#a78bfa',
+            callback: "function(v){return '₳'+Number(v).toFixed(8).replace(/0+$/,'').replace(/\\.$/,'')}",
+          },
+          grid: { color: 'rgba(139,92,246,0.08)' },
         },
       },
     },
@@ -155,12 +132,12 @@ async function createChartUrl(config: Record<string, unknown>): Promise<string |
       'https://quickchart.io/chart/create',
       {
         chart: config,
-        backgroundColor: '#0d1117',
+        backgroundColor: '#0d0d17',
         width: 900,
-        height: 520,
+        height: 500,
         version: '4',
       },
-      { timeout: 10_000 }
+      { timeout: 12_000 }
     );
     return res.data?.success ? res.data.url : null;
   } catch (err) {
@@ -175,10 +152,7 @@ async function execute(interaction: ChatInputCommandInteraction, ctx: BotContext
 
   await interaction.deferReply();
 
-  const [candles, adaUsd] = await Promise.all([
-    ctx.dexhunterChart.getCandles(LUMP_UNIT, spec.period, spec.candles),
-    getAdaUsd(),
-  ]);
+  const candles = await ctx.dexhunterChart.getCandles(LUMP_UNIT, spec.period, spec.candles);
 
   if (candles.length === 0) {
     await interaction.editReply(`No chart data returned from DexHunter for ${LUMP_TICKER} (${spec.label}).`);
@@ -188,16 +162,34 @@ async function execute(interaction: ChatInputCommandInteraction, ctx: BotContext
   const first = candles[0];
   const last = candles[candles.length - 1];
   const changePct = first.open > 0 ? ((last.close - first.open) / first.open) * 100 : 0;
-  const color = changePct >= 0 ? 0x26a69a : 0xef5350;
+  const high = Math.max(...candles.map((c) => c.high));
+  const low = Math.min(...candles.map((c) => c.low));
+  const volume = candles.reduce((sum, c) => sum + (c.volume || 0), 0);
+  const arrow = changePct >= 0 ? '🟣' : '🔴';
 
-  const chartUrl = await createChartUrl(buildCandlestickConfig(candles, spec, adaUsd));
+  const [chartUrl] = await Promise.all([createChartUrl(buildCandlestickConfig(candles, spec))]);
+
   const swapUrl = `https://app.dexhunter.io/swaps?tokenIn=&tokenOut=${LUMP_UNIT}`;
+  const snekUrl = `https://www.snek.fun/token/${LUMP_UNIT}`;
 
   const embed = new EmbedBuilder()
-    .setColor(color)
-    .setAuthor({ name: `📈  $${LUMP_TICKER}  ·  DexHunter` })
-    .setDescription(`**${spec.span}** · **${spec.label}** · [Swap on DexHunter](${swapUrl})`)
-    .setFooter({ text: 'DexHunter charts · CoinGecko ADA/USD' });
+    .setColor(LUMP_PURPLE)
+    .setAuthor({ name: `$${LUMP_TICKER} · LUMP/ADA` })
+    .setDescription(
+      [
+        `**${spec.span}** · **${spec.label}**  —  ${arrow} **${changePct >= 0 ? '+' : ''}${changePct.toFixed(2)}%**`,
+        `[Swap on DexHunter](${swapUrl})  ·  [View on Snek.fun](${snekUrl})`,
+      ].join('\n')
+    )
+    .addFields(
+      { name: 'Close', value: `₳${formatAdaPrice(last.close)}`, inline: true },
+      { name: 'High', value: `₳${formatAdaPrice(high)}`, inline: true },
+      { name: 'Low', value: `₳${formatAdaPrice(low)}`, inline: true },
+      { name: 'Volume', value: formatVolume(volume), inline: true },
+      { name: 'Candles', value: String(candles.length), inline: true },
+      { name: 'Source', value: 'DexHunter', inline: true }
+    )
+    .setFooter({ text: 'DexHunter OHLCV' });
 
   if (chartUrl) embed.setImage(chartUrl);
 
