@@ -11,6 +11,17 @@ export interface Candle {
   volume: number;
 }
 
+interface RawCandle {
+  time?: number;
+  unix?: number;
+  timestamp?: string;
+  open?: number;
+  high?: number;
+  low?: number;
+  close?: number;
+  volume?: number;
+}
+
 export type ChartPeriod = '15min' | '1hour' | '4hour' | '1day';
 
 const PERIOD_SECONDS: Record<ChartPeriod, number> = {
@@ -48,7 +59,7 @@ export class DexHunterChartService {
     const to = Math.floor(Date.now() / 1000);
     const from = to - PERIOD_SECONDS[period] * candleCount;
     try {
-      const response = await this.http.post<{ data?: Candle[] } | Candle[]>('/charts', {
+      const response = await this.http.post<{ data?: RawCandle[] } | RawCandle[]>('/charts', {
         tokenIn: '',
         tokenOut: unit,
         period,
@@ -57,7 +68,27 @@ export class DexHunterChartService {
       });
       const raw = Array.isArray(response.data) ? response.data : response.data?.data ?? [];
       return raw
-        .filter((c): c is Candle => c && typeof c.close === 'number')
+        .map((c): Candle | null => {
+          if (!c || typeof c.close !== 'number') return null;
+          const time =
+            typeof c.unix === 'number'
+              ? c.unix
+              : typeof c.time === 'number'
+                ? c.time
+                : c.timestamp
+                  ? Math.floor(new Date(c.timestamp).getTime() / 1000)
+                  : NaN;
+          if (!Number.isFinite(time)) return null;
+          return {
+            time,
+            open: c.open ?? c.close,
+            high: c.high ?? c.close,
+            low: c.low ?? c.close,
+            close: c.close,
+            volume: c.volume ?? 0,
+          };
+        })
+        .filter((c): c is Candle => c !== null)
         .sort((a, b) => a.time - b.time);
     } catch (err) {
       logger.warn(`DexHunter chart fetch failed for ${unit} @ ${period}`, err);
