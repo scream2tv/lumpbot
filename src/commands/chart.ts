@@ -1,7 +1,9 @@
+import axios from 'axios';
 import { ChatInputCommandInteraction, EmbedBuilder, SlashCommandBuilder } from 'discord.js';
 import { SlashCommand } from './types';
 import { BotContext } from '../botContext';
 import { Candle, ChartPeriod } from '../services/dexhunterChart';
+import { logger } from '../utils/logger';
 
 const LUMP_POLICY_ID = '73797786382c0832b5787a5b306f5308488f14571b7061f79396ad2c';
 const LUMP_ASSET_NAME_HEX = '4c756d70';
@@ -38,7 +40,7 @@ function candleDate(time: number): Date {
   return new Date(ms);
 }
 
-function buildQuickChartUrl(candles: Candle[], period: ChartPeriod): string {
+function buildChartConfig(candles: Candle[], period: ChartPeriod): Record<string, unknown> {
   const labels = candles.map((c) => {
     const d = candleDate(c.time);
     return period === '1day'
@@ -47,7 +49,7 @@ function buildQuickChartUrl(candles: Candle[], period: ChartPeriod): string {
   });
   const closes = candles.map((c) => c.close);
 
-  const chart = {
+  return {
     type: 'line',
     data: {
       labels,
@@ -75,9 +77,20 @@ function buildQuickChartUrl(candles: Candle[], period: ChartPeriod): string {
       },
     },
   };
+}
 
-  const payload = encodeURIComponent(JSON.stringify(chart));
-  return `https://quickchart.io/chart?bkg=%230d1117&w=720&h=360&c=${payload}`;
+async function createShortChartUrl(config: Record<string, unknown>): Promise<string | null> {
+  try {
+    const res = await axios.post<{ success: boolean; url: string }>(
+      'https://quickchart.io/chart/create',
+      { chart: config, backgroundColor: '#0d1117', width: 720, height: 360 },
+      { timeout: 10_000 }
+    );
+    return res.data?.success ? res.data.url : null;
+  } catch (err) {
+    logger.warn('QuickChart short-url create failed', err);
+    return null;
+  }
 }
 
 async function execute(interaction: ChatInputCommandInteraction, ctx: BotContext): Promise<void> {
@@ -100,10 +113,11 @@ async function execute(interaction: ChatInputCommandInteraction, ctx: BotContext
   const arrow = changePct >= 0 ? '🟢' : '🔴';
   const color = changePct >= 0 ? 0x2ecc71 : 0xe74c3c;
 
+  const chartUrl = await createShortChartUrl(buildChartConfig(candles, period));
+
   const embed = new EmbedBuilder()
     .setTitle(`${LUMP_NAME}/ADA — ${period}`)
     .setColor(color)
-    .setImage(buildQuickChartUrl(candles, period))
     .addFields(
       { name: 'Price', value: `${formatPrice(last.close)} ₳`, inline: true },
       { name: 'Change', value: `${arrow} ${changePct.toFixed(2)}%`, inline: true },
@@ -113,6 +127,8 @@ async function execute(interaction: ChatInputCommandInteraction, ctx: BotContext
       { name: 'Candles', value: String(candles.length), inline: true },
     )
     .setFooter({ text: `DexHunter • ${candles.length} candles` });
+
+  if (chartUrl) embed.setImage(chartUrl);
 
   const ts = candleDate(last.time);
   if (!Number.isNaN(ts.getTime())) embed.setTimestamp(ts);
