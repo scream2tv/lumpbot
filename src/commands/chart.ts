@@ -33,9 +33,14 @@ function formatPrice(value: number): string {
   return value.toFixed(4);
 }
 
+function candleDate(time: number): Date {
+  const ms = time > 1e12 ? time : time * 1000;
+  return new Date(ms);
+}
+
 function buildQuickChartUrl(candles: Candle[], period: ChartPeriod): string {
   const labels = candles.map((c) => {
-    const d = new Date(c.time * 1000);
+    const d = candleDate(c.time);
     return period === '1day'
       ? `${d.getUTCMonth() + 1}/${d.getUTCDate()}`
       : `${d.getUTCHours().toString().padStart(2, '0')}:${d.getUTCMinutes().toString().padStart(2, '0')}`;
@@ -107,8 +112,10 @@ async function execute(interaction: ChatInputCommandInteraction, ctx: BotContext
       { name: 'Low', value: `${formatPrice(low)} ₳`, inline: true },
       { name: 'Candles', value: String(candles.length), inline: true },
     )
-    .setFooter({ text: `DexHunter • ${candles.length} candles` })
-    .setTimestamp(new Date(last.time * 1000));
+    .setFooter({ text: `DexHunter • ${candles.length} candles` });
+
+  const ts = candleDate(last.time);
+  if (!Number.isNaN(ts.getTime())) embed.setTimestamp(ts);
 
   await interaction.editReply({ embeds: [embed] });
 }
