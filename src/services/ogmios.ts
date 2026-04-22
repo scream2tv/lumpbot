@@ -75,6 +75,7 @@ export class OgmiosClient extends EventEmitter {
   private reconnectTimer: NodeJS.Timeout | null = null;
   private mempoolRunning = false;
   private mempoolSeen = new Map<string, number>();
+  private awaitingCursorConfirm = false;
 
   constructor(private readonly cfg: CardanoStackConfig) {
     super();
@@ -120,6 +121,7 @@ export class OgmiosClient extends EventEmitter {
       await this.findIntersection([tip]);
       this.currentPoint = tip;
       this.syncing = true;
+      this.awaitingCursorConfirm = true;
       for (let i = 0; i < PIPELINE_DEPTH; i++) this.sendNextBlock();
       this.backoff = INITIAL_BACKOFF_MS;
       void this.runMempoolLoop();
@@ -260,6 +262,11 @@ export class OgmiosClient extends EventEmitter {
     } else if (result.direction === 'backward' && result.point) {
       const point: ChainPoint = { slot: result.point.slot ?? 0, id: result.point.id ?? '' };
       if (point.id) this.currentPoint = point;
+      if (this.awaitingCursorConfirm) {
+        // First backward after findIntersection is cursor confirmation, not a reorg.
+        this.awaitingCursorConfirm = false;
+        return;
+      }
       this.emit('rollback', point);
     }
   }
