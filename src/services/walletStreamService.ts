@@ -18,7 +18,6 @@ import { hexToUtf8Safe, truncateMiddle } from '../utils/formatters';
 import { CardanoStackConfig } from '../config/cardano';
 
 const DM_COOLDOWN_MS = 24 * 60 * 60 * 1000;
-const PER_WALLET_COOLDOWN_MS = 15_000;
 const DISPATCH_DEDUPE_TTL_MS = 30 * 60 * 1000;
 
 type Direction = 'IN' | 'OUT' | 'SELF';
@@ -270,6 +269,14 @@ export class WalletStreamService {
           return aa > bb ? -1 : aa < bb ? 1 : 0;
         });
 
+      logger.info('watched wallet activity', {
+        source: opts.mutateShadow ? 'block' : 'mempool',
+        direction,
+        txId: tx.id,
+        subs: subs.length,
+        lovelaceDelta: lovelaceDelta.toString(),
+        assets: assetDeltas.length,
+      });
       await Promise.all(
         subs.map((sub) =>
           this.dispatch(sub, {
@@ -314,8 +321,6 @@ export class WalletStreamService {
     const dedupeKey = `${sub.id}:${m.txId}`;
     if (this.dispatchedKeys.has(dedupeKey)) return;
     if (sub.dmDisabledUntil && now < sub.dmDisabledUntil) return;
-    if (sub.lastNotifiedAt && now < sub.lastNotifiedAt + PER_WALLET_COOLDOWN_MS) return;
-    if (sub.lastNotifiedTxHash === m.txId) return;
     this.dispatchedKeys.set(dedupeKey, now);
     this.pruneDispatchedKeys();
 
@@ -350,7 +355,6 @@ export class WalletStreamService {
     try {
       const user = await this.client.users.fetch(sub.discordUserId);
       await user.send({ embeds: [buildGroupedMoveEmbed(evt)] });
-      this.storage.updateWatchAfterNotify(sub.id, m.txId, Date.now());
     } catch (err) {
       if (err instanceof DiscordAPIError && err.code === 50007) {
         logger.info('DMs blocked, cooling down 24h', { userId: sub.discordUserId });

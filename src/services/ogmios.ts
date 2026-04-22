@@ -116,9 +116,13 @@ export class OgmiosClient extends EventEmitter {
 
   private async connectAndSync(): Promise<void> {
     try {
+      logger.debug('Ogmios: opening socket');
       await this.openSocket();
+      logger.debug('Ogmios: socket open, querying tip');
       const tip = this.currentPoint ?? (await this.queryTip());
+      logger.debug('Ogmios: tip resolved, finding intersection', tip);
       await this.findIntersection([tip]);
+      logger.debug('Ogmios: intersection found');
       this.currentPoint = tip;
       this.syncing = true;
       this.awaitingCursorConfirm = true;
@@ -236,6 +240,12 @@ export class OgmiosClient extends EventEmitter {
     }
     const id = msg.id;
     const pending = id != null ? this.pending.get(id) : undefined;
+    if (!pending) {
+      logger.debug('Ogmios: unmatched message', {
+        id, method: msg.method, hasResult: !!msg.result, hasError: !!msg.error,
+        keys: Object.keys(msg),
+      });
+    }
     if (pending) {
       this.pending.delete(id);
       if (msg.error) {
@@ -280,19 +290,42 @@ export class OgmiosClient extends EventEmitter {
   }
 
   private async queryTip(): Promise<ChainPoint> {
-    const result: any = await this.rpc('queryLedgerState/tip');
-    if (!result?.slot || !result?.id) throw new Error('Ogmios tip query returned no point');
+    const result: any = await this.rpcWithTimeout('queryNetwork/tip', null, 10_000);
+    if (!result?.slot || !result?.id) throw new Error(`Ogmios tip query returned no point: ${JSON.stringify(result)}`);
     return { slot: Number(result.slot), id: String(result.id) };
   }
 
   private async findIntersection(points: ChainPoint[]): Promise<ChainPoint> {
     const serialized = points.map((p) => ({ slot: p.slot, id: p.id }));
-    const result: any = await this.rpc('findIntersection', { points: serialized });
+    const result: any = await this.rpcWithTimeout('findIntersection', { points: serialized }, 10_000);
     const intersection = result?.intersection;
     if (!intersection || intersection === 'origin') {
       return points[0];
     }
     return { slot: Number(intersection.slot), id: String(intersection.id) };
+  }
+
+  /**
+   * Wraps rpc() with a timeout. Used for bootstrap calls (queryTip,
+   * findIntersection) where a hang indicates the node isn't responding —
+   * we want to fail fast and hit the reconnect backoff instead of blocking
+   * the startup path forever. Streaming calls (nextBlock, acquireMempool)
+   * legitimately block waiting for new data and don't use this.
+   */
+  private rpcWithTimeout(method: string, params: unknown, timeoutMs: number): Promise<any> {
+    return new Promise((resolve, reject) => {
+      let done = false;
+      const timer = setTimeout(() => {
+        if (done) return;
+        done = true;
+        try { this.ws?.close(); } catch { /* ignore */ }
+        reject(new Error(`${method} timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+      this.rpc(method, params).then(
+        (v) => { if (done) return; done = true; clearTimeout(timer); resolve(v); },
+        (e) => { if (done) return; done = true; clearTimeout(timer); reject(e); },
+      );
+    });
   }
 
   private rpc(method: string, params: unknown = null): Promise<any> {

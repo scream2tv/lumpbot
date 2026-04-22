@@ -65,7 +65,7 @@ export class KupoService {
 
   async health(): Promise<{ ok: boolean; detail: string }> {
     try {
-      const res = await axios.get(`${this.baseUrl}/health`, { timeout: 5_000 });
+      const res = await axios.get(`${this.baseUrl}/health`, { timeout: 15_000 });
       return { ok: res.status >= 200 && res.status < 300, detail: `HTTP ${res.status}` };
     } catch (err: any) {
       return { ok: false, detail: err?.message ?? 'unknown error' };
