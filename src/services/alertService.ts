@@ -11,7 +11,7 @@ import { LumpBotConfig } from '../config';
 import { logger } from '../utils/logger';
 import { buildPolicyEmbed } from '../utils/embedBuilder';
 import { buildAlertComponents } from '../utils/components';
-import { BlockfrostService } from './blockfrost';
+import { KoiosService } from './koios';
 import { DexHunterService } from './dexhunter';
 import { SnekService, SnekTokenStats } from './snek';
 import { PriceSource, StorageService } from './storage';
@@ -27,7 +27,7 @@ export class AlertService {
     private readonly client: Client,
     private readonly config: LumpBotConfig,
     private readonly storage: StorageService,
-    private readonly blockfrost: BlockfrostService,
+    private readonly koios: KoiosService,
     private readonly dexhunter: DexHunterService,
     private readonly snek: SnekService
   ) {}
@@ -50,7 +50,7 @@ export class AlertService {
 
     try {
       const [blockfrostData, dexhunterData] = await Promise.all([
-        this.blockfrost.getPolicySummary(id),
+        this.koios.getPolicySummary(id),
         this.dexhunter.getStatsByPolicyId(id),
       ]);
 
@@ -147,7 +147,7 @@ export class AlertService {
   async buildRefreshedEmbed(policyId: string): Promise<EmbedBuilder | null> {
     const id = policyId.toLowerCase();
     const [blockfrostData, dexhunterData] = await Promise.all([
-      this.blockfrost.getPolicySummary(id),
+      this.koios.getPolicySummary(id),
       this.dexhunter.getStatsByPolicyId(id),
     ]);
     const assetNameHex = resolveAssetNameHex(id, dexhunterData?.unit ?? null, blockfrostData);
@@ -188,7 +188,7 @@ export class AlertService {
 function resolveAssetNameHex(
   policyId: string,
   dexhunterUnit: string | null,
-  blockfrost: Awaited<ReturnType<BlockfrostService['getPolicySummary']>>
+  blockfrost: Awaited<ReturnType<KoiosService["getPolicySummary"]>>
 ): string | null {
   const fromDex = extractNameFromUnit(policyId, dexhunterUnit);
   if (fromDex) return fromDex;

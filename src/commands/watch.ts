@@ -5,12 +5,15 @@ import {
 } from 'discord.js';
 import { SlashCommand } from './types';
 import { BotContext } from '../botContext';
-import { parseCardanoAddress, shortenAddress } from '../utils/cardanoAddress';
+import {
+  parseCardanoAddress,
+  deriveStakeAddress,
+  shortenAddress,
+} from '../utils/cardanoAddress';
 import { logger } from '../utils/logger';
 
 function normalizeLabel(raw: string | null): string | null {
   if (!raw) return null;
-  // strip control chars, trim
   const cleaned = raw.replace(/[\x00-\x1f\x7f]/g, '').trim();
   if (cleaned.length === 0) return null;
   if (cleaned.length > 32) return cleaned.slice(0, 32);
@@ -104,53 +107,39 @@ async function handleAdd(
 
   await interaction.deferReply({ ephemeral: true });
 
+  // Resolve stake key entirely from the bech32 (CIP-19) — no network call.
   let stakeKey: string;
   let isEnterprise = false;
   let enterpriseNote = '';
-  let baselineTxHash: string | null = null;
-  let neverActive = false;
 
-  try {
-    if (parsed.kind === 'stake') {
-      stakeKey = parsed.raw;
-    } else {
-      const resolved = await ctx.blockfrost.getStakeKeyForAddress(parsed.raw);
-      if (resolved) {
-        stakeKey = resolved;
-      } else {
-        stakeKey = parsed.raw;
-        isEnterprise = true;
-        enterpriseNote =
-          "\n⚠️ This is an enterprise address (no stake key). " +
-          "I'll watch only this specific address — funds moved to other addresses won't be detected.";
-      }
+  if (parsed.kind === 'reward') {
+    stakeKey = parsed.raw;
+  } else if (parsed.kind === 'base') {
+    const derived = deriveStakeAddress(parsed);
+    if (!derived) {
+      await interaction.editReply("Couldn't derive stake key from that address.");
+      return;
     }
-
-    try {
-      baselineTxHash = await ctx.walletWatchService.baselineTxHashFor(stakeKey);
-    } catch (err: any) {
-      const status = err?.response?.status ?? err?.status_code;
-      if (status === 404) {
-        neverActive = true;
-      } else {
-        throw err;
-      }
-    }
-  } catch (err) {
-    logger.warn('/watch add: blockfrost lookup failed', { err, raw });
-    await interaction.editReply(
-      "Couldn't verify that address right now — try again in a moment.",
-    );
+    stakeKey = derived;
+  } else if (parsed.kind === 'enterprise') {
+    stakeKey = parsed.raw;
+    isEnterprise = true;
+    enterpriseNote =
+      "\n⚠️ This is an enterprise address (no stake key). " +
+      "I'll watch only this specific address — funds moved to other addresses won't be detected.";
+  } else {
+    await interaction.editReply("Pointer addresses aren't supported yet.");
     return;
   }
 
+  let added: import('../services/storage').WalletWatch;
   try {
-    ctx.storage.addWalletWatch({
+    added = ctx.storage.addWalletWatch({
       userId,
       stakeKey,
       displayAddress: parsed.raw,
       isEnterprise,
-      baselineTxHash,
+      baselineTxHash: null,
       label,
     });
   } catch (err: any) {
@@ -163,13 +152,16 @@ async function handleAdd(
     return;
   }
 
-  const neverActiveNote = neverActive
-    ? "\nℹ️ This address has no on-chain activity yet. I'll DM you when it does."
-    : '';
+  // Bootstrap the wallet's current UTxOs in the streamer (fire-and-forget;
+  // worst case we miss the very first tx if it lands before Kupo responds,
+  // which is exceedingly rare for a freshly-added wallet).
+  ctx.walletStream
+    .onWatchAdded(added)
+    .catch((err) => logger.warn('walletStream.onWatchAdded failed', { err }));
 
   await interaction.editReply(
     `✅ Watching ${label ? `**${label}** (${shortenAddress(parsed.raw)})` : shortenAddress(parsed.raw)}. You'll get a DM in this account when it moves.` +
-      `${enterpriseNote}${neverActiveNote}`,
+      enterpriseNote,
   );
 }
 
@@ -187,19 +179,27 @@ async function handleRemove(
   await interaction.deferReply({ ephemeral: true });
 
   const raw = interaction.options.getString('address', true).trim().toLowerCase();
+
+  // Look up the DB row first so we can tell the streamer to un-index it.
+  const existing = ctx.storage.listWalletWatches(userId).find((w) =>
+    w.stakeKey.toLowerCase() === raw || w.displayAddress.toLowerCase() === raw,
+  );
+
   let removed = ctx.storage.removeWalletWatch(userId, raw);
+  let removedWatch = existing ?? null;
+
   if (!removed) {
     const parsed = parseCardanoAddress(raw);
-    if (parsed && parsed.kind === 'payment') {
-      try {
-        const stakeKey = await ctx.blockfrost.getStakeKeyForAddress(parsed.raw);
-        if (stakeKey) removed = ctx.storage.removeWalletWatch(userId, stakeKey);
-      } catch {
-        // best-effort
+    if (parsed?.kind === 'base') {
+      const derived = deriveStakeAddress(parsed);
+      if (derived) {
+        removedWatch = ctx.storage.listWalletWatches(userId).find((w) => w.stakeKey === derived) ?? null;
+        removed = ctx.storage.removeWalletWatch(userId, derived);
       }
     }
   }
 
+  if (removed && removedWatch) ctx.walletStream.onWatchRemoved(removedWatch);
   await interaction.editReply(removed ? '🗑️ Removed.' : "You weren't watching that wallet.");
 }
 

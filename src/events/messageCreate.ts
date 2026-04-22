@@ -28,7 +28,7 @@ export function registerMessageCreate(client: Client, ctx: BotContext): void {
         if (fingerprints.length === 0) return;
 
         for (const fingerprint of fingerprints.slice(0, 3)) {
-          const resolved = await ctx.blockfrost.getAssetByFingerprint(fingerprint);
+          const resolved = await ctx.koios.getAssetByFingerprint(fingerprint);
           if (resolved?.policyId) policyIds.push(resolved.policyId.toLowerCase());
         }
       }

@@ -1,5 +1,6 @@
 import dotenv from 'dotenv';
 import path from 'path';
+import { loadCardanoConfig, CardanoStackConfig } from './config/cardano';
 
 dotenv.config();
 
@@ -33,10 +34,7 @@ export interface LumpBotConfig {
     monitoredChannelIds: string[];
     alphaRoleId: string;
   };
-  blockfrost: {
-    apiKey: string;
-    network: 'mainnet' | 'preprod' | 'preview';
-  };
+  cardano: CardanoStackConfig;
   dexhunter: {
     apiKey: string;
     partnerId: string;
@@ -60,11 +58,9 @@ export interface LumpBotConfig {
   };
   walletWatchChannelId: string;
   verifiedWalletRoleId: string;
-  walletPollIntervalMs: number;
 }
 
 export function loadConfig(): LumpBotConfig {
-  const network = optional('BLOCKFROST_NETWORK', 'mainnet') as LumpBotConfig['blockfrost']['network'];
   const databasePath = path.resolve(optional('DATABASE_PATH', './data/lumpbot.sqlite'));
   const logLevel = (optional('LOG_LEVEL', 'info') as LogLevel) || 'info';
 
@@ -77,10 +73,7 @@ export function loadConfig(): LumpBotConfig {
       monitoredChannelIds: parseChannelList(optional('MONITORED_CHANNEL_IDS')),
       alphaRoleId: optional('ALPHA_ROLE_ID'),
     },
-    blockfrost: {
-      apiKey: required('BLOCKFROST_API_KEY'),
-      network,
-    },
+    cardano: loadCardanoConfig(),
     dexhunter: {
       apiKey: optional('DEXHUNTER_API_KEY'),
       partnerId: optional('DEXHUNTER_PARTNER_ID'),
@@ -104,6 +97,5 @@ export function loadConfig(): LumpBotConfig {
     },
     walletWatchChannelId: required('WALLET_WATCH_CHANNEL_ID'),
     verifiedWalletRoleId: required('VERIFIED_WALLET_ROLE_ID'),
-    walletPollIntervalMs: Math.max(10000, Number(optional('WALLET_POLL_INTERVAL_MS', '30000')) || 30000),
   };
 }

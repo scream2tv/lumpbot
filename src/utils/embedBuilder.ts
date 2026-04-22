@@ -1,5 +1,5 @@
 import { EmbedBuilder } from 'discord.js';
-import { PolicyAssetSummary } from '../services/blockfrost';
+import { PolicyAssetSummary } from '../services/koios';
 import { DexHunterTokenStats } from '../services/dexhunter';
 import { SnekTokenStats } from '../services/snek';
 import { PolicyCall } from '../services/storage';

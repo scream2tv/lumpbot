@@ -24,7 +24,7 @@ async function execute(interaction: ChatInputCommandInteraction, ctx: BotContext
   } else {
     const fingerprints = extractAssetFingerprints(raw);
     if (fingerprints.length > 0) {
-      const resolved = await ctx.blockfrost.getAssetByFingerprint(fingerprints[0]);
+      const resolved = await ctx.koios.getAssetByFingerprint(fingerprints[0]);
       if (resolved?.policyId) policyId = resolved.policyId.toLowerCase();
     }
   }
@@ -35,7 +35,7 @@ async function execute(interaction: ChatInputCommandInteraction, ctx: BotContext
   }
 
   const [blockfrostData, dexhunterData] = await Promise.all([
-    ctx.blockfrost.getPolicySummary(policyId),
+    ctx.koios.getPolicySummary(policyId),
     ctx.dexhunter.getStatsByPolicyId(policyId),
   ]);
 
